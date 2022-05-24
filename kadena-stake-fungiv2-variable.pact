@@ -125,6 +125,7 @@
     ;reward-duration: if apy is not fixed, this is time it takes for rewards to become available to stakers, ex: 86400
     ;reward-amount: if apy is not fixed, this is the amount of rewards available each reward-duration, ex: 10
     ;apy-fixed: true or false for creating a pool with fixed apy (use apy variable) or variable apy (use reward-duration/reward-amount)
+    ;withdraw-duration: time in seconds a staker's tokens must be locked before a staker can withdraw
 
     (defun create-pool (id:string
                         name:string
@@ -234,10 +235,23 @@
                           {
                               "tokens-locked": (+ (at "tokens-locked" pool-usage-data) amount),
                               "last-updated": (at "block-time" (chain-data)),
-                              "multiplier": (+ (at "multiplier" pool-usage-data) (/ (at "reward-amount" pool-data) (+ (at "tokens-locked" pool-usage-data) amount )  ) )
+
+                              ;BELOW WE CALCULATE THE NEW MULTIPLIER
+                              ;NEW MULTIPLIER = CURERNT MULTIPLIER + (TOKENS-EMITTED-PER-DAY / (TOTAL STAKED TOKENS))
+
+                              "multiplier": (+
+                                              (at "multiplier" pool-usage-data)         ;current pool multiplier
+                                              (/
+                                                (at "reward-amount" pool-data)          ;tokens emitted per day
+                                                (+
+                                                  (at "tokens-locked" pool-usage-data)  ;tokens already in pool
+                                                  amount                                ;tokens staked by user
+                                                )
+                                              )
+                                            )
                           }
                       )
-                      ;NEW MULTIPLIER = CURERNT MULTIPLIER + (10 / (TOTAL TOKENS-STAKED + NEW USER STAKE))
+
 
 
                       ;If this staker's balance is 0, this staker is new, and we add +1 staker count to the pools data:
@@ -311,6 +325,31 @@
       )
     )
 
+    (defun calculate-available-now (start-time:time pool-id:string)
+        @doc " Calculates reward tokens available for variable APY distribution at any given time "
+        (let
+            (
+                (time-passed (diff-time  (at "block-time" (chain-data)) start-time) )
+                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token"]))
+                (pool-usage-data (read pools-usage pool-id ["owed"]))
+            )
+            (let
+                (
+                    (token:module{fungible-v2} (at "reward-token" pool-data))
+
+                )
+                ;We clamp our reward calculation under the pool's available balance so we don't exceed it
+                (let
+                    (
+                        (total-available (floor (* (/ time-passed (at "reward-duration" pool-data)) (at "reward-amount" pool-data)) (token::precision) ))
+                        (max-available (floor (- (at "balance" pool-data) (at "owed" pool-usage-data) ) (token::precision)))
+                    )
+                    (enforce ( >= time-passed 0.0) "From date is in the future")
+                    (if (<= total-available max-available ) total-available max-available)
+                )
+            )
+        )
+    )
 
 
 
@@ -461,8 +500,8 @@
 
 )
 
-;(create-table free.kadena-stake-tokens.pools)
-;(create-table free.kadena-stake-tokens.pools-usage)
-;(create-table free.kadena-stake-tokens.pool-user-stats)
-;(create-table free.kadena-stake-tokens.stakes)
-;(free.kadena-stake-tokens.initialize)
+;(create-table free.kadena-stake-fungiv2.pools)
+;(create-table free.kadena-stake-fungiv2.pools-usage)
+;(create-table free.kadena-stake-fungiv2.pool-user-stats)
+;(create-table free.kadena-stake-fungiv2.stakes)
+;(free.kadena-stake-fungiv2.initialize)
