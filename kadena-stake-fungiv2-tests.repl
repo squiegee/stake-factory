@@ -157,7 +157,7 @@
 (begin-tx)
 (define-namespace 'test (sig-keyset) (sig-keyset))
 (env-data { 'ns: 'test })
-(load "kadena-stake-fungiv2-variable.pact")
+(load "kadena-stake-fungiv2-vbot.pact")
 (create-table test.kadena-stake-fungiv2.pools)
 (create-table test.kadena-stake-fungiv2.pools-usage)
 (create-table test.kadena-stake-fungiv2.stakes)
