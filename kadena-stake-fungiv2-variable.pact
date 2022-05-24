@@ -111,18 +111,17 @@
 
     ;;;;; Pool Creator Related
 
-    ;create pool - for creating staking pool of reward token/stake token type fungi-v2/fungi-v2
-    ;id- id of pool, ex: "test-pool"
-    ;name- name of pool, ex: "Test Pool"
-    ;balance- amount of reward token given by pool owner to be distributed to stakers, ex: 200
-    ;apy- constant apy of pool reward, ex: 10.0
-    ;reward-token- name of fungible-v2 reward token provided by pool creator, ex: coin
-    ;stake-token1- name of fungible-v2 token which is first side of LP pair, ex: coin
-    ;stake-token2- name of fungible-v2 token which is second side of LP pair, ex: coin
-    ;account- pool creator account, ex: k:mykaccount
-    ;max-reward-per-account- max rewards a stakers account can ever claim in the pool, ex: 200
-    ;claim-wait-seconds- minimum number of seconds between staker reward claims, ex: 0
-    ;max-reward-per-claim- max rewards a staker account can claim per wait duration, ex: 200
+    ;create pool: for creating staking pool of reward token/stake token type fungi-v2/fungi-v2
+    ;id: id of pool, ex: "test-pool"
+    ;name: name of pool, ex: "Test Pool"
+    ;balance: amount of reward token given by pool owner to be distributed to stakers, ex: 200
+    ;apy: constant apy of pool reward, ex: 10.0
+    ;reward-token: name of fungible-v2 reward token provided by pool creator, ex: coin
+    ;stake-token: name of fungible-v2 token stakers must stake for reward token, ex: coin
+    ;account: pool creator account, ex: k:mykaccount
+    ;max-reward-per-account: max rewards a stakers account can ever claim in the pool, ex: 200
+    ;claim-wait-seconds: minimum number of seconds between staker reward claims, ex: 0
+    ;max-reward-per-claim: max rewards a staker account can claim per wait duration, ex: 200
     ;reward-duration: if apy is not fixed, this is time it takes for rewards to become available to stakers, ex: 86400
     ;reward-amount: if apy is not fixed, this is the amount of rewards available each reward-duration, ex: 10
     ;apy-fixed: true or false for creating a pool with fixed apy (use apy variable) or variable apy (use reward-duration/reward-amount)
