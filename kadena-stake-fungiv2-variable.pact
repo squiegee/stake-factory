@@ -99,6 +99,7 @@
         last-claimed:time
         last-withdraw:time
         multiplier:decimal
+        start-time:time
     )
 
     (deftable pools:{pools-schema})
@@ -227,7 +228,8 @@
                           "rewards": t_rewards,
                           "last-claimed": t_last-claimed,
                           "last-withdraw": t_last-withdraw,
-                          "multiplier": (at "multiplier" pool-usage-data) ;THE MULTIPLIER IS RECORDED FROM THE POOL
+                          "multiplier": (at "multiplier" pool-usage-data), ;THE MULTIPLIER IS RECORDED FROM THE POOL
+                          "start-time": (at "block-time" (chain-data))
                       })
 
                       ;Update pool usage data
@@ -311,32 +313,44 @@
                   (pool-usage-data (read pools-usage pool-id))
                   (stake-id (get-stake-id-key account pool-id))
               )
-              (let
+              (let*
                 (
                   (stake (read stakes stake-id))
+                  (days-since-stake (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" stake)) 86400 ) 0)  )
                 )
-                (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) )
 
+                (if (>= days-since-stake 1.0)
+                  (- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) (at "reward-amount" pool-data)  )
+                  0.0
+                )
 
                 ;Testing below:
                 ;(* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) )
-                ;time-since-update
+                ;(- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) 10.0  )
+                ;(- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) (calculate-available-now (at "start-time" stake) "test-pool" ) )
               )
       )
     )
 
-    (defun calculate-available-now (start-time:time pool-id:string)
-        @doc " Calculates reward tokens available for variable APY distribution at any given time "
+
+
+
+;///////////////////////////
+;OLD UTILITIES
+;//////////////////////////
+
+
+    (defun calculate-total-emitted-tokens (pool-id:string)
+        @doc " Calculates tokens emitted by pool since it began "
         (let
             (
-                (time-passed (diff-time  (at "block-time" (chain-data)) start-time) )
-                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token"]))
+                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token" "start-time"]))
                 (pool-usage-data (read pools-usage pool-id ["owed"]))
             )
             (let
                 (
                     (token:module{fungible-v2} (at "reward-token" pool-data))
-
+                    (time-passed (diff-time  (at "block-time" (chain-data)) (at "start-time" pool-data) ) )
                 )
                 ;We clamp our reward calculation under the pool's available balance so we don't exceed it
                 (let
@@ -350,18 +364,6 @@
             )
         )
     )
-
-
-
-
-
-
-
-
-
-;///////////////////////////
-;OLD UTILITIES
-;//////////////////////////
 
     (defun apy-for-ratio-of-seconds-in-year (ratio:decimal apy:decimal)
         (* ratio (/ apy 100))
