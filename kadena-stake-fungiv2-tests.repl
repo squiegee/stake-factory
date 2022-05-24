@@ -288,3 +288,5 @@
 (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
 ;Doug gets 5 rewards if he withdraws today
 (commit-tx)
+
+;Tests with bot 
