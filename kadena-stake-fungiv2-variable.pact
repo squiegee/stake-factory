@@ -71,16 +71,16 @@
         apy-fixed:bool
         stakers:decimal
         withdraw-duration:decimal
+        start-balance:decimal
     )
 
     (defschema pools-usage-schema
         @doc "Pool usage data"
         tokens-locked:decimal
         last-updated:time
-        owed:decimal
         paid:decimal
-        distributed:decimal
         multiplier:decimal
+        next-multiplier:decimal
     )
 
     (defschema pools-user-stats-schema
@@ -175,20 +175,50 @@
                     "reward-amount": reward-amount,
                     "apy-fixed": apy-fixed,
                     "stakers": 0.0,
-                    "withdraw-duration": withdraw-duration
+                    "withdraw-duration": withdraw-duration,
+                    "start-balance": balance
                 }
             )
             ;Insert pool blank usage
             (insert pools-usage id {
                 "tokens-locked": 0.0,
                 "last-updated": (at "block-time" (chain-data)),
-                "owed": 0.0,
                 "paid": 0.0,
-                "distributed": 0.0,
-                "multiplier": 1.0
+                "multiplier": 1.0,
+                "next-multiplier": 1.0
             })
             ;Return a message
             (format "Created pool {} with {} {}" [name balance reward-token])
+        )
+    )
+
+    (defun add-balance-to-pool (pool-id:string account:string amount:decimal)
+        @doc "Adds more balance to a pool for reward distribution and reactivates a pool - Pool creator only"
+        (with-capability (ACCOUNT_GUARD account)
+        (let
+                (
+                    (pool-data (read pools pool-id ["account" "reward-token" "balance"]))
+                )
+                (let
+                    (
+                        (token:module{fungible-v2} (at "reward-token" pool-data))
+                    )
+                    ;Enforce pool owner
+                    (enforce (= (at "account" pool-data) account) "Access prohibited.")
+                    ;Enforce token precision
+                    (enforce-unit amount (token::precision))
+                    ;Transfer token to pool
+                    (token::transfer account pool-id amount)
+                    ;Update pool
+                    (update pools pool-id
+                          {
+                              "balance": (+ (at "balance" pool-data) amount),
+                              "active": true
+                          }
+                    )
+                    (format "Added {} {} rewards to {}" [amount token pool-id])
+                )
+        )
         )
     )
 
@@ -197,108 +227,278 @@
     (defun create-stake (pool-id:string account:string amount:decimal)
         @doc " Creates or adds a stake to a pool for a user, claiming rewards first if they are due"
         (with-capability (ACCOUNT_GUARD account)
-        ;(This spot is for a future function for claiming rewards)
             (let
                 (
                     (pool-data (read pools pool-id))
                     (stake-id (get-stake-id-key account pool-id))
                     (pool-usage-data (read pools-usage pool-id))
                 )
-                (let
-                    (
-                        (token:module{fungible-v2} (at "stake-token" pool-data))
-                    )
-                    ;Enforce active pool
-                    (enforce (= (at "active" pool-data) true) "Staking pool is not active.")
-                    ;Enforce stakers only
-                    (enforce (!= (at "account" pool-data) account) "Pool owners may not stake their own pools.")
-                    ;Transfer stake to pool
-                    (token::transfer account pool-id amount)
-                    ;Insert stake data
-                    (with-default-read stakes stake-id
-                      { "id" : stake-id, "pool-id" : pool-id, "balance" : 0.0, "last-updated" : (at "block-time" (chain-data)), "account" : account, "rewards" : 0.0, "last-claimed" : (at "block-time" (chain-data)), "last-withdraw": (at "block-time" (chain-data))  }
-                      { "id" := t_id, "pool-id" := t_pool-id, "balance" := t_balance, "last-updated" := t_last-updated, "account" := t_account, "rewards" := t_rewards, "last-claimed" := t_last-claimed, "last-withdraw" := t_last-withdraw }
-                      (write stakes stake-id {
-                          "id": t_id,
-                          "pool-id": t_pool-id,
-                          "balance": (+ t_balance amount),
-                          "last-updated": (at "block-time" (chain-data)),
-                          "account": t_account,
-                          "rewards": t_rewards,
-                          "last-claimed": t_last-claimed,
-                          "last-withdraw": t_last-withdraw,
-                          "multiplier": (at "multiplier" pool-usage-data), ;THE MULTIPLIER IS RECORDED FROM THE POOL
-                          "start-time": (at "block-time" (chain-data))
-                      })
+                (if (and (= (at "active" pool-data) true) (> (at "balance" pool-data) 0.0) )
+                  (let
+                      (
+                          (token:module{fungible-v2} (at "stake-token" pool-data))
+                      )
+                      ;Enforce active pool
+                      (enforce (= (at "active" pool-data) true) "Staking pool is not active.")
+                      ;Enforce stakers only
+                      (enforce (!= (at "account" pool-data) account) "Pool owners may not stake their own pools.")
+                      ;Transfer stake to pool
+                      (token::transfer account pool-id amount)
+                      ;Insert stake data
+                      (with-default-read stakes stake-id
+                        { "id" : stake-id, "pool-id" : pool-id, "balance" : 0.0, "last-updated" : (at "block-time" (chain-data)), "account" : account, "rewards" : 0.0, "last-claimed" : (at "block-time" (chain-data)), "last-withdraw": (at "block-time" (chain-data))  }
+                        { "id" := t_id, "pool-id" := t_pool-id, "balance" := t_balance, "last-updated" := t_last-updated, "account" := t_account, "rewards" := t_rewards, "last-claimed" := t_last-claimed, "last-withdraw" := t_last-withdraw }
 
-                      ;Update pool usage data
-                      (update pools-usage pool-id
-                          {
-                              "tokens-locked": (+ (at "tokens-locked" pool-usage-data) amount),
-                              "last-updated": (at "block-time" (chain-data)),
+                        ;If this is not the first staker, update the pools rewards multiplier
+                        (if (> (at "stakers" pool-data) 0.0)
+                          (update pools-usage pool-id
+                            {
+                                ;BELOW WE CALCULATE THE NEW MULTIPLIER FOR EVERY STAKER AFTER THE FIRST
+                                ;NEW MULTIPLIER = CURERNT MULTIPLIER + (TOKENS-EMITTED-PER-DAY / (TOTAL STAKED TOKENS))
+                                "last-updated": (at "block-time" (chain-data)),
+                                "multiplier": (calculate-multiplier pool-id )
+                            }
+                        )
+                          true
+                        )
 
-                              ;BELOW WE CALCULATE THE NEW MULTIPLIER
-                              ;NEW MULTIPLIER = CURERNT MULTIPLIER + (TOKENS-EMITTED-PER-DAY / (TOTAL STAKED TOKENS))
+                        ;Update user stake information
+                        (write stakes stake-id {
+                            "id": t_id,
+                            "pool-id": t_pool-id,
+                            "balance": (+ t_balance amount),
+                            "last-updated": (at "block-time" (chain-data)),
+                            "account": t_account,
+                            "rewards": t_rewards,
+                            "last-claimed": t_last-claimed,
+                            "last-withdraw": t_last-withdraw,
+                            "multiplier": (if (> (at "stakers" pool-data) 0.0)
+                                            (calculate-multiplier pool-id)
+                                            (at "multiplier" pool-usage-data)
+                                          ), ;If this is not the first staker, calculate a new multiplier
+                            "start-time": (at "block-time" (chain-data))
+                        })
 
-                              "multiplier": (+
-                                              (at "multiplier" pool-usage-data)         ;current pool multiplier
-                                              (/
-                                                (at "reward-amount" pool-data)          ;tokens emitted per day
-                                                (+
-                                                  (at "tokens-locked" pool-usage-data)  ;tokens already in pool
-                                                  amount                                ;tokens staked by user
-                                                )
-                                              )
-                                            )
-                          }
+                        (update pools-usage pool-id
+                            {
+                                "tokens-locked": (+ (at "tokens-locked" pool-usage-data) amount),
+                                "last-updated": (at "block-time" (chain-data))
+                            }
+                        )
+
+                        ;If this staker's balance is 0, this staker is new, and we add +1 staker count to the pools data:
+                        (if (= t_balance 0.0)
+                          (update pools pool-id {"stakers": (+ (at "stakers" pool-data) 1.0) })
+                          true
+                        )
+
                       )
 
-
-
-                      ;If this staker's balance is 0, this staker is new, and we add +1 staker count to the pools data:
-                      (if (= t_balance 0.0)
-                        (update pools pool-id {"stakers": (+ (at "stakers" pool-data) 1.0) })
-                        true
-                      )
-
-                    )
-
-
-                    (format "Staked {} {} in pool {} with account {}" [amount (at "stake-token" pool-data)  pool-id account])
-               )
+                      (format "Staked {} {} in pool {} with account {}" [amount (at "stake-token" pool-data)  pool-id account])
+                 )
+                 (format "The pool {} is currently deactivated and not accepting stakers" [pool-id]))
             )
         )
     )
 
+    (defun claim (pool-id:string account:string claim-stake:bool)
+        @doc "Claims the rewards a user is owed, or rewards and stake"
+        (with-capability (ACCOUNT_GUARD account)
+        (with-default-read stakes (get-stake-id-key account pool-id)
+          { "account" : 'nonulls, "balance" : 0.0 }
+          { "account" := t_account, "balance" := t_balance }
+          (if (and (= account t_account) (> t_balance 0.0) )
+            (let
+                  (
+                      (stake-id (get-stake-id-key account pool-id))
+                      (pool-data (read pools pool-id))
+                      (pool-usage-data (read pools-usage pool-id))
+                  )
+                  (let*
+                      (
+                        (stake (read stakes stake-id))
+                        (reward-token:module{fungible-v2} (at "reward-token" pool-data))
+                        (stake-token:module{fungible-v2} (at "stake-token" pool-data))
+                        (to-pay-max (calculate-rewards pool-id account) )
+                        (available (at "balance" pool-data))
+                      )
+                      (let
+                          (
+                            (to-pay (if (>= (- available to-pay-max ) 0.0)
+                                      (if (> to-pay-max (at "max-reward-per-claim" pool-data))
+                                        (at "max-reward-per-claim" pool-data)
+                                        to-pay-max
+                                      )
+                                      (if (> (at "balance" pool-data) (at "max-reward-per-claim" pool-data))
+                                        (at "max-reward-per-claim" pool-data)
+                                        (at "balance" pool-data)
+                                      )
+                                    )
+                            )
+                            (to-pay-stake (if (or
+                                                (= claim-stake true)
+                                                (= (at "active" pool-data) false))
+                                                  (at "balance" stake)
+                                                  0.0
+                                          )
+                            )
+                          )
+                          ;Enforce single tx
+                          ;(enforce (= 1 (length (at "exec-code" (read-msg)))) "One transaction only")
+                          ;Enforce account
+                          (enforce (= account (at "account" stake)) "Not authorised to claim this stake")
+                          ;Enforce balance
+                          (enforce (>= to-pay 0.0) "You have no rewards to claim in this pool.")
+                          ;Enforce claim reward duration
+                          (if (or (= claim-stake true) (= (at "active" pool-data) false) ) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) ) "You must wait the full claim reward duration before claiming rewards.") )
+                          ;If the user is requesting stake + rewards and reward token = stake token, we compose 1 transfer to transfer both
+                          (if (or (= (at "active" pool-data) false) (= claim-stake true) )
+                            (let
+                                (
+                                  (stakeANDreward true)
+                                )
+                                ;The user is withdrawing stake and reward here
+                                ;Enforce withdraw rules
+                                (if (and (= claim-stake true) (= (at "active" pool-data) true) ) (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-withdraw stake)) (at "withdraw-duration" pool-data) ) "You must wait the full withdraw wait duration before claiming rewards.") true )
+                                ;We should find out if stake token = reward token
+                                ;If so, we compose a single transfer capability to transfer 1 token back
+                                ;If not, we compose 2 different transfer capabilitys to transfer 2 tokens back
+                                (if (= (reward-token::details pool-id) (stake-token::details pool-id))
+                                  (if (= (get-token-key reward-token) (get-token-key stake-token))
+                                    (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (install-capability (reward-token::TRANSFER pool-id account (+ to-pay-stake to-pay)))
+                                      (install-capability (reward-token::TRANSFER pool-id account (+ to-pay-stake (at "balance" pool-data))))
+                                    )
+                                    (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                      (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                    )
+                                  )
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                      (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                  )
+                                )
+                                ;Make reward transfer or reward + stake transfer depending on token type
+                                (if (= (reward-token::details pool-id) (stake-token::details pool-id))
+                                  (if (= (get-token-key reward-token) (get-token-key stake-token))
+                                    (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (reward-token::transfer pool-id account (+ to-pay-stake to-pay))
+                                      (reward-token::transfer pool-id account (+ to-pay-stake (at "balance" pool-data)))
+                                    )
+                                    (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (reward-token::transfer pool-id account to-pay )
+                                      (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                    )
+                                  )
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                      (reward-token::transfer pool-id account to-pay )
+                                      (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                  )
+                                )
+                                ;Now lets transfer the users stake back if we haven't already in the logic above
+                                ;If stake token type is different from reward token type, compose a stake token transfer allowance
+                                (if (= (reward-token::details pool-id) (stake-token::details pool-id))
+                                  true
+                                  (if (= (get-token-key reward-token) (get-token-key stake-token))
+                                    true
+                                    (install-capability (stake-token::TRANSFER pool-id account to-pay-stake))
+                                  )
+                                )
+                                ;If stake token type is different from reward token type, make stake token transfer now.
+                                (if (= (reward-token::details pool-id) (stake-token::details pool-id))
+                                  true
+                                  (if (= (get-token-key reward-token) (get-token-key stake-token))
+                                    true
+                                    (stake-token::transfer pool-id account to-pay-stake)
+                                  )
+                                )
+                                ;Update user stake stats
+                                (update stakes stake-id  {"last-updated":  (at "block-time" (chain-data)), "balance": (-(at "balance" stake) to-pay-stake), "last-withdraw":  (at "block-time" (chain-data)) })
 
+                              )
 
+                              (let
+                                (
+                                  (rewardONLY true)
+                                )
+                                (if (and (> to-pay 0.0) (= claim-stake false) )
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                    (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                    (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                  )
+                                true)
+                                ;Transfer back the reward token amount composed above if any rewards are owed to the user
+                                (if (> to-pay 0.0)
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                    (reward-token::transfer pool-id account to-pay)
+                                    (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                  )
+                                true)
+                              )
+
+                          )
+
+                          ;Update pool usage data
+                          (update pools-usage pool-id
+                            {
+                                "last-updated": (at "block-time" (chain-data)),
+                                "tokens-locked": (- (at "tokens-locked" pool-usage-data) to-pay-stake),
+                                "paid": (+ (at "paid" pool-usage-data) to-pay),
+                                "multiplier": (calculate-multiplier pool-id)
+                            }
+                          )
+
+                          ;Update pool data
+                          (update pools pool-id
+                            {
+                                "balance": (- (at "balance" pool-data) to-pay),
+                                "active": (if (<= (- (at "balance" pool-data) to-pay) 0.0) false (at "active" pool-data) ),
+                                "stakers": (if (> to-pay-stake 0.0) (- (at "stakers" pool-data) 1.0) (at "stakers" pool-data) )
+                            }
+                          )
+
+                          (update stakes stake-id
+                            {
+                              "last-updated":  (at "block-time" (chain-data)),
+                              "rewards": (- to-pay-max to-pay),
+                              "last-claimed":  (at "block-time" (chain-data)),
+                              "multiplier": (at "multiplier" (read pools-usage pool-id)),
+                              "last-withdraw": (if (> to-pay-stake 0.0) (at "block-time" (chain-data)) (at "last-withdraw" stake) )
+                              }
+                          )
+
+                          ;Return message
+                          (format "Rewarded {} with {} {} for {}% of pool and unstaked {} {}" [account to-pay reward-token  (floor (* (/ (at "balance" stake) (at "tokens-locked" pool-usage-data)  ) 100) 2) to-pay-stake stake-token])
+
+                      )
+                  )
+                )
+          (format "{} has no rewards in {}" [account pool-id]))
+        )
+
+        )
+    )
 
 
     ;;///////////////////////
     ;;UTILITIES / GETTERS
     ;;//////////////////////
 
-
     (defun calculate-multiplier (pool-id:string)
       @doc " Calculates a pools current multiplier "
       (let
               (
 
-                  (pool-data (read pools pool-id))
-                  (pool-usage-data (read pools-usage pool-id))
+                  (pool-data (read pools pool-id ["reward-amount"]))
+                  (pool-usage-data (read pools-usage pool-id ["last-updated" "multiplier" "tokens-locked"]))
               )
-              (let
+              ;(days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" pool-usage-data)) 86400) 0)  )
+              (let*
                   (
-                    (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" pool-usage-data)) 86400) 0)  )
+                    (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" (read pools-usage pool-id))) 86400) 0)  )
                   )
-                  (+ (at "multiplier" pool-usage-data) (/ (* days-since-last-update (at "reward-amount" pool-data) ) (at "tokens-locked" pool-usage-data) ) )
-
-                  ;Testing below:
-                  ;(+ (at "multiplier" pool-usage-data) (/ (* days-since-update (at "reward-amount" pool-data) ) (at "tokens-locked" pool-usage-data) ) )
-                  ;days-since-update
-                  ;time-since-update
-                  ;(+ 1.10 (/ (* 1.0 10.0 )  200) )
-                  ;(+ 1.0 (/ (* (- 2.0 1.0) 10.0 )  100) )
+                  (+ (at "multiplier" pool-usage-data) (/ (* days-since-last-update (at "reward-amount" pool-data) ) (at "tokens-locked" (read pools-usage pool-id))  ) )
               )
       )
     )
@@ -307,44 +507,25 @@
       @doc " Calculates a pools rewards for a user "
       (let
               (
-
-                  (pool-data (read pools pool-id))
-                  (pool-usage-data (read pools-usage pool-id))
+                  (pool-data (read pools pool-id ["reward-token"]))
                   (stake-id (get-stake-id-key account pool-id))
               )
-              (let*
+              (let
                 (
-                  (stake (read stakes stake-id))
-                  (days-since-stake (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" stake)) 86400 ) 0)  )
+                  (stake (read stakes stake-id ["balance" "multiplier"]))
+                  (token:module{fungible-v2} (at "reward-token" pool-data))
                 )
-
-                (if (>= days-since-stake 1.0)
-                  (- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) (at "reward-amount" pool-data)  )
-                  0.0
-                )
-
-                ;Testing below:
-                ;(* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) )
-                ;(- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) 10.0  )
-                ;(- (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) (calculate-available-now (at "start-time" stake) "test-pool" ) )
+                (floor (* (at "balance" stake) (- (calculate-multiplier pool-id) (at "multiplier" stake) ) ) (token::precision))
               )
       )
     )
 
-
-
-
-;///////////////////////////
-;OLD UTILITIES
-;//////////////////////////
-
-
     (defun calculate-total-emitted-tokens (pool-id:string)
-        @doc " Calculates tokens emitted by pool since it began "
+        @doc " Calculates the number of tokens emitted by a pool since it began "
         (let
             (
-                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token" "start-time"]))
-                (pool-usage-data (read pools-usage pool-id ["owed"]))
+                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token" "start-time" "start-balance"]))
+                (pool-usage-data (read pools-usage pool-id ["paid"]))
             )
             (let
                 (
@@ -355,7 +536,7 @@
                 (let
                     (
                         (total-available (floor (* (/ time-passed (at "reward-duration" pool-data)) (at "reward-amount" pool-data)) (token::precision) ))
-                        (max-available (floor (- (at "balance" pool-data) (at "owed" pool-usage-data) ) (token::precision)))
+                        (max-available (at "start-balance" pool-data))
                     )
                     (enforce ( >= time-passed 0.0) "From date is in the future")
                     (if (<= total-available max-available ) total-available max-available)
@@ -363,6 +544,11 @@
             )
         )
     )
+
+;///////////////////////////
+;OLD UTILITIES
+;//////////////////////////
+
 
     (defun apy-for-ratio-of-seconds-in-year (ratio:decimal apy:decimal)
         (* ratio (/ apy 100))
