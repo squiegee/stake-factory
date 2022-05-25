@@ -314,7 +314,7 @@
                       (pool-data (read pools pool-id))
                       (pool-usage-data (read pools-usage pool-id))
                   )
-                  (let*
+                  (let
                       (
                         (stake (read stakes stake-id))
                         (reward-token:module{fungible-v2} (at "reward-token" pool-data))
@@ -357,12 +357,12 @@
                                 (
                                   (stakeANDreward true)
                                 )
-                                ;The user is withdrawing stake and reward here
+                                ;Here the user is withdrawing rewards AND stake tokens
                                 ;Enforce withdraw rules
-                                (if (and (= claim-stake true) (= (at "active" pool-data) true) ) (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-withdraw stake)) (at "withdraw-duration" pool-data) ) "You must wait the full withdraw wait duration before claiming rewards.") true )
-                                ;We should find out if stake token = reward token
-                                ;If so, we compose a single transfer capability to transfer 1 token back
-                                ;If not, we compose 2 different transfer capabilitys to transfer 2 tokens back
+                                (if (and (= claim-stake true) (= (at "active" pool-data) true) ) (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-withdraw stake)) (at "withdraw-duration" pool-data) ) "You must wait the full withdraw wait duration before claiming your stake.") true )
+                                ;Now, we should determine if stake token = reward token
+                                ;If so, we compose a single transfer capability to transfer 1 token type back
+                                ;If not, we compose 2 different transfer capabilitys to transfer 2 token types back
                                 (if (= (reward-token::details pool-id) (stake-token::details pool-id))
                                   (if (= (get-token-key reward-token) (get-token-key stake-token))
                                     (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
@@ -422,6 +422,7 @@
                                 (
                                   (rewardONLY true)
                                 )
+                                ;Here the user is requesting to claim rewards only
                                 (if (and (> to-pay 0.0) (= claim-stake false) )
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
                                     (install-capability (reward-token::TRANSFER pool-id account to-pay))
@@ -458,6 +459,7 @@
                             }
                           )
 
+                          ;Update user stake data
                           (update stakes stake-id
                             {
                               "last-updated":  (at "block-time" (chain-data)),
@@ -490,13 +492,13 @@
       (let
               (
 
-                  (pool-data (read pools pool-id ["reward-amount"]))
+                  (pool-data (read pools pool-id ["reward-amount" "reward-duration"]))
                   (pool-usage-data (read pools-usage pool-id ["last-updated" "multiplier" "tokens-locked"]))
               )
               ;(days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" pool-usage-data)) 86400) 0)  )
-              (let*
+              (let
                   (
-                    (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" (read pools-usage pool-id))) 86400) 0)  )
+                    (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" (read pools-usage pool-id))) (at "reward-duration" pool-data)) 0)  )
                   )
                   (+ (at "multiplier" pool-usage-data) (/ (* days-since-last-update (at "reward-amount" pool-data) ) (at "tokens-locked" (read pools-usage pool-id))  ) )
               )
