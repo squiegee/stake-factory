@@ -173,24 +173,25 @@
 ;VARIABLE APY TESTING 1
 ;/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+;/////////////////////////////////////////////////////////////////////////////////
 
-;Test create pool 'test-pool' with k:stuart for 200 KDA
+;Test create pool 'test-pool' with k:stuart for 50 KDA
 (begin-tx)
 (coin.get-balance "k:stuart")
-(test-capability (coin.TRANSFER "k:stuart" "test-pool" 200.0))
+(test-capability (coin.TRANSFER "k:stuart" "test-pool" 50.0))
 (env-chain-data { "block-time" : (time "2023-04-01T00:00:00Z") })
 
 (test.kadena-stake-fungiv2.create-pool
     "test-pool"
     "Test Pool"
     10.0
-    200.0
+    50.0
     coin
     coin
     "k:stuart"
-    200.0
+    50.0
     0.0
-    200.0
+    50.0
     86400.0
     10.0
     false
@@ -199,9 +200,11 @@
 (coin.get-balance "k:stuart")
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
-;A pool is created that will distribute 10 rewards every 86400.0 seconds (1 day)
+;A pool is created with 50 KDA rewards
+;The pool will distribute 10 rewards every 86400.0 seconds (1 day)
 ;pool multiplier: 1.0
 
+;/////////////////////////////////////////////////////////////////////////////////////
 
 ;Test create stake 100 coin in test-pool with k:emily
 (begin-tx)
@@ -212,60 +215,425 @@
 (coin.get-balance "k:emily")
 (coin.get-balance "test-pool")
 
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(expect
+    "Emily gets 0 rewards same day she stakes"
+    0.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
+)
+
+(expect
+    "Current Pool Multiplier = 1.0"
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.0)
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.0)
+)
+
+(expect
+    "Emilys Saved Multiplier = 1.0"
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:emily")) 1.0)
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:emily")) 1.0)
+)
+
 (test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:emily")
+
 (commit-tx)
 ;Emily stakes 100 coin for 100% of the pool
-;pool multiplier: 1.1
-;emily-multiploer: 1.0
 
-;UNCOMMNET/COMMENT TEST STAKING DOUG SAME TIME AS EMILY
-;NOTE HOW EMILY'S REWARDS CHANGE IN THE TESTS BELOW THIS ONE
-(begin-tx)
-(test-capability (coin.TRANSFER "k:doug" "test-pool" 100.0))
-(test.kadena-stake-fungiv2.create-stake "test-pool" "k:doug" 100.0)
-(commit-tx)
-;Doug stakes the same time as emily 100 coin for 50% of the pool
+;////////////////////////////////////////////////////////////////////////////////////////////////
 
-;Lets check pool multiplier after doug and emily have both staked at the same time
-(begin-tx)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:doug")
-(commit-tx)
-;pool-multiploer: 1.15
-;doug-mutliplier: 1.1
-
-;Lets check emilys rewards due at the same time she stakes
-(begin-tx)
-(test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
-(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
-(commit-tx)
-;Correct - Emily is owed 0 tokens the day she stakes
-
-;Lets check emilys and dougs rewards 1 DAY later
+;Lets check rewards 1 DAY later for emily
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-02T00:00:00Z") })
-(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
-;Test calculate rewards distributed = 10
+;Fastforward time +24 hours
 
-(test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
-;Emily is rewarded with all 10 rewards 1 day later- Correct
+(expect
+    "The Pool has emitted 10 tokens thus far"
+    10.000000000000
+    (test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
+)
 
-(test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
-;Doug is rewarded with 0 tokens on the same day he stakes - correct
+(expect
+    "Emily gets 10 rewards if she withdraws today"
+    10.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
+)
 
+(expect
+    "Current Pool Multiplier = 1.0"
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.0)
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.0)
+)
+
+(expect
+    "A multiplier calculated right now is 1.1"
+    1.1
+    (test.kadena-stake-fungiv2.calculate-multiplier "test-pool")
+)
+
+(test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:emily")
 (commit-tx)
+;Test passes - Next day data is correct
 
-;REWARDS ARE CALCULATING CORRECTLY AT THIS POINT
+;////////////////////////////////////////////////////////////////////////////////////////////////
 
-;Lets check emilys rewards 2 DAYS after she stakes
+
+;Lets check rewards 2 DAYS later for emily
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-03T00:00:00Z") })
-(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
-;Test calculate emitted tokens = 20 tokens emitted
+;Fastforward time +24 hours
 
-(test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
-;Emily gets 15 rewards 2 days later
-(test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
-;Doug gets 5 rewards 2 day later
+(expect
+    "The Pool has emitted 20 tokens thus far"
+    20.000000000000
+    (test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
+)
+
+(expect
+    "Emily gets 20 rewards if she withdraws today"
+    20.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
+)
+
+(expect
+    "Current Pool Multiplier = 1.0"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.0)
+)
+
+(expect
+    "A multiplier calculated right now is 1.2"
+    1.2
+    (test.kadena-stake-fungiv2.calculate-multiplier "test-pool")
+)
+(commit-tx)
+;Test passes - Next day data is correct
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;Test create stake 100 coin in test-pool with k:doug
+(begin-tx)
+(coin.get-balance "k:doug")
+(env-chain-data { "block-time" : (time "2023-04-03T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:doug" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:doug" 100.0)
+(coin.get-balance "k:doug")
+(coin.get-balance "test-pool")
+(test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:doug")
+
+(expect
+    "Doug gets 0 rewards same day he stakes"
+    0.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
+)
+
+(expect
+    "Current Pool Multiplier = 1.2"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.2)
+)
+
+(expect
+    "Dougs Saved Multiplier = 1.2"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:doug")) 1.2)
+)
+
+(commit-tx)
+;Doug stakes 100 coin for 50% of the pool
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+;Lets check rewards 3 DAYS later for emily and doug
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-04T00:00:00Z") })
+;Fastforward time +24 hours
+
+(expect
+    "The Pool has emitted 30 tokens thus far"
+    30.000000000000
+    (test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
+)
+
+(expect
+    "Emily gets 25 rewards if she withdraws today"
+    25.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
+)
+
+(expect
+    "Doug gets 5 rewards if she withdraws today"
+    5.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
+)
+
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+
+(expect
+    "Current Pool Multiplier = 1.2"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.2)
+)
+
+(expect
+    "A multiplier calculated right now is 1.25"
+    1.25
+    (test.kadena-stake-fungiv2.calculate-multiplier "test-pool")
+)
+(commit-tx)
+;Test passes - Next day data for both stakers is correct
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+;Test create stake 100 coin in test-pool with k:kitty SAME DAY AS ABOVE
+(begin-tx)
+(coin.get-balance "k:kitty")
+(env-chain-data { "block-time" : (time "2023-04-04T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0)
+(coin.get-balance "k:kitty")
+(coin.get-balance "test-pool")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+
+(expect
+    "Kitty gets 0 rewards same day he stakes"
+    0.000000000000
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:kitty")
+)
+
+(expect
+    "Current Pool Multiplier = 1.25"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.25)
+)
+
+
+(expect
+    "Dougs Saved Multiplier = 1.25"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-user-stakes "test-pool" "k:kitty")) 1.25)
+)
+
+(commit-tx)
+;Kitty stakes 100 coin for 33% of the pool
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;Lets check rewards 4 DAYS later for emily and doug and kitty
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-05T00:00:00Z") })
+;Fastforward time +24 hours
+
+(expect
+    "The Pool has emitted 40 tokens thus far"
+    40.000000000000
+    (test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
+)
+
+(expect
+    "Emily gets 28.3 rewards if she withdraws today"
+    28.333333333333
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:emily")
+)
+
+(expect
+    "Doug gets 8.3 rewards if she withdraws today"
+    8.333333333333
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:doug")
+)
+
+(expect
+    "Kitty gets 3.3 rewards if she withdraws today"
+    3.333333333333
+    (test.kadena-stake-fungiv2.calculate-rewards "test-pool" "k:kitty")
+)
+
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+
+(expect
+    "Current Pool Multiplier = 1.25"
+    true
+    (= (at "multiplier" (test.kadena-stake-fungiv2.get-pool-info "test-pool")) 1.25)
+)
+
+(expect
+    "A multiplier calculated right now is 1.283"
+    1.283333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333
+    (test.kadena-stake-fungiv2.calculate-multiplier "test-pool")
+)
+(commit-tx)
+;Test passes - Next day data for both stakers is correct
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;THE NEXT 3 TESTS WILL SPAN OVER 3 DAYS TO DRAIN THE POOL EMPTY SO WE CAN OBSERVE THE POOL AS IT COLLAPSES
+;THE FIRST FEW TESTS WE STEP THROUGH 3 DAYS UNTIL THE POOL EMITS ALL ITS REWARDS TO STAKERS
+
+;////4 Days after pool launch - 40 rewards emitted
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-05T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-05T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:doug" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-05T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;////5 Days after pool launch - 50 rewards emitted
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-06T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-06T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:doug" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-06T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;////6 Days after pool launch - Max rewards emitted - Pool will empty and deactivate in this test
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-07T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(expect
+  "300 Tokens Left In Pool (Un-Staked Tokens) - Correct"
+  300.0
+  (coin.get-balance "test-pool"))
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-07T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:doug" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-07T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-07T00:00:04Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(expect
+  "0 Tokens Left In Pool (Un-Staked Tokens) - Correct"
+  0.0
+  (coin.get-balance "test-pool"))
+(commit-tx)
+
+;///The pool has emptied, deactivated, and the stakers all withdrew their stake trying to claim rewards
+
+;////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;SANITY CHECK TIME
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-10T00:00:00Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+
+;Test create new stake in a deactivated pool
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(expect
+  "The pool test-pool is currently deactivated and not accepting stakers"
+  "The pool test-pool is currently deactivated and not accepting stakers"
+  (test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0))
+;Kitty cannot stake because the pool is deactivated and empty - correct
+
+;Test claim rewards from a pool that a user has 0 rewards due
+(expect
+  "k:emily has no rewards in test-pool"
+  "k:emily has no rewards in test-pool"
+  (test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false))
+;Emily cannot claim anything from test pool because she has already claimed her rewards, and unstaked - correct
+
+;Test adding 50 rewards to the empty pool, thus reactivating it
+(test-capability (coin.TRANSFER "k:stuart" "test-pool" 50.0))
+(expect
+  "Added 50.0 coin rewards to test-pool"
+  "Added 50.0 coin rewards to test-pool"
+  (test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
+;Stuart reactivates the pool with 50 new rewards for stakers
+;All stakers left this pool when they claimed their rewards earlier
+
+;Test claim rewards again with emily for sanity check after pool reactivation
+(expect
+  "k:emily has no rewards in test-pool"
+  "k:emily has no rewards in test-pool"
+  (test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false))
+;Emily has no rewards in test pool - correct
+
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;CONTINUATION OF POOL AFTER POOL COLLAPSES AND GETS REACTIVATED BY STUART
+
+;2 STAKERS ARRIVE:
+
+;Kitty stakes 100 kda
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-11T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0)
+(commit-tx)
+
+;Emily stakes 100 kda
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-11T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0)
+(commit-tx)
+
+;Kitty claims rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-12T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-15T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
