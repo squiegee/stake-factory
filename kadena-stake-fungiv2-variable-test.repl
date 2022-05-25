@@ -607,6 +607,8 @@
 
 ;CONTINUATION OF POOL AFTER POOL COLLAPSES AND GETS REACTIVATED BY STUART
 
+;//////////////////////////////////
+
 ;2 STAKERS ARRIVE:
 
 ;Kitty stakes 100 kda
@@ -623,7 +625,11 @@
 (test.kadena-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0)
 (commit-tx)
 
-;Kitty claims rewards 1 day later
+;/////////////////////////////////
+
+;SANITY CHECKS FOR BOTH STAKERS
+
+;Kitty claims 5 rewards 1 day later
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-12T00:00:01Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
@@ -631,9 +637,97 @@
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
 
+;Emily claimes 20 rewards 4 days later
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-15T00:00:02Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(env-gas 0) (env-gaslog)
 (test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(env-gaslog)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;Emily claimes 5 rewards 1 day later
+;Emily unstakes 100 coin
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-16T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(env-gas 0) (env-gaslog)
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" true)
+(env-gaslog)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;Kitty claims 20 rewards same day
+;Kitty unstakes 100 coin
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-16T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(env-gas 0) (env-gaslog)
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" true)
+(env-gaslog)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;POOL DEACTIVATES AGAIN AFTER ALL REWARDS ARE EMITTED
+
+;Kitty & Doug come along 10 days later attempts to claim rewards they dont have
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-26T00:00:00Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(test.kadena-stake-fungiv2.claim "test-pool" "k:doug" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;Stuart comes along and reactivates pool
+(begin-tx)
+;Test adding 50 rewards to the empty pool, thus reactivating it
+(test-capability (coin.TRANSFER "k:stuart" "test-pool" 50.0))
+(expect
+  "Added 50.0 coin rewards to test-pool"
+  "Added 50.0 coin rewards to test-pool"
+  (test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
+;Stuart reactivates the pool with 50 new rewards for stakers
+;All stakers left this pool when they claimed their rewards earlier
+(commit-tx)
+
+;Emily stakes 100 kda
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-05-01T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0)
+(commit-tx)
+
+;Emily claims 10 rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-05-02T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;Emily claims 20 rewards 2 days later and unstakes 100 coin
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-05-04T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" true)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;Kitty stakes 100 kda 10 days later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-05-14T00:00:03Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0)
+(commit-tx)
+
+;Kitty claims 10 rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-05-15T00:00:04Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool")
+(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
