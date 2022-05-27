@@ -194,7 +194,6 @@
     50.0
     86400.0
     10.0
-    false
     86400.0
 )
 (coin.get-balance "k:stuart")
@@ -210,8 +209,10 @@
 (begin-tx)
 (coin.get-balance "k:emily")
 (env-chain-data { "block-time" : (time "2023-04-01T00:00:00Z") })
+
 (test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
 (test.kadena-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0)
+
 (coin.get-balance "k:emily")
 (coin.get-balance "test-pool")
 
@@ -237,6 +238,7 @@
 
 (commit-tx)
 ;Emily stakes 100 coin for 100% of the pool
+
 
 ;////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -569,6 +571,9 @@
 (env-chain-data { "block-time" : (time "2023-04-10T00:00:00Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 
+(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
+;Pool has emitted 50 tokens
+
 ;Test create new stake in a deactivated pool
 (test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
 (expect
@@ -584,13 +589,11 @@
   (test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false))
 ;Emily cannot claim anything from test pool because she has already claimed her rewards, and unstaked - correct
 
-;Test adding 50 rewards to the empty pool, thus reactivating it
+;Test adding 50 rewards to the empty pool while its exhausted
 (test-capability (coin.TRANSFER "k:stuart" "test-pool" 50.0))
-(expect
-  "Added 50.0 coin rewards to test-pool"
-  "Added 50.0 coin rewards to test-pool"
-  (test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
-;Stuart reactivates the pool with 50 new rewards for stakers
+(expect-failure "You cannot add rewards to exhausted pools."
+(test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
+;Stuart cannot reactivate the exhausted pool
 ;All stakers left this pool when they claimed their rewards earlier
 
 ;Test claim rewards again with emily for sanity check after pool reactivation
@@ -611,14 +614,16 @@
 
 ;2 STAKERS ARRIVE:
 
-;Kitty stakes 100 kda
+;Kitty trys to stake 100 kda in the deactivated pool but cannot
 (begin-tx)
+(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
 (env-chain-data { "block-time" : (time "2023-04-11T00:00:00Z") })
+(test.kadena-stake-fungiv2.calculate-total-emitted-tokens "test-pool")
 (test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
 (test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0)
 (commit-tx)
 
-;Emily stakes 100 kda
+;Emily trys to stake 100 kda in the deactivated pool but cannot
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-11T00:00:00Z") })
 (test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
@@ -629,105 +634,210 @@
 
 ;SANITY CHECKS FOR BOTH STAKERS
 
-;Kitty claims 5 rewards 1 day later
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-04-12T00:00:01Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;Emily claimes 20 rewards 4 days later
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-04-15T00:00:02Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(env-gas 0) (env-gaslog)
-(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
-(env-gaslog)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;Emily claimes 5 rewards 1 day later
-;Emily unstakes 100 coin
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-04-16T00:00:03Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(env-gas 0) (env-gaslog)
-(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" true)
-(env-gaslog)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;Kitty claims 20 rewards same day
-;Kitty unstakes 100 coin
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-04-16T00:00:03Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(env-gas 0) (env-gaslog)
-(test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" true)
-(env-gaslog)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;POOL DEACTIVATES AGAIN AFTER ALL REWARDS ARE EMITTED
-
-;Kitty & Doug come along 10 days later attempts to claim rewards they dont have
+;Kitty & Doug & Emily come along 10 days later attempts to claim rewards they dont have
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-04-26T00:00:00Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
 (test.kadena-stake-fungiv2.claim "test-pool" "k:doug" false)
+(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
+;All stakers get nothing
 
-;/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+;////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;Now we will again attempt to reactivate the pool to see the pool refuse stakers due to being exhausted
 
 ;Stuart comes along and reactivates pool
 (begin-tx)
 ;Test adding 50 rewards to the empty pool, thus reactivating it
 (test-capability (coin.TRANSFER "k:stuart" "test-pool" 50.0))
-(expect
-  "Added 50.0 coin rewards to test-pool"
-  "Added 50.0 coin rewards to test-pool"
-  (test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
-;Stuart reactivates the pool with 50 new rewards for stakers
+(expect-failure "You cannot add rewards to exhausted pools."
+(test.kadena-stake-fungiv2.add-balance-to-pool "test-pool" "k:stuart" 50.0))
+;Stuart cannot reactivate this pool because it exhausted all of its rewards
 ;All stakers left this pool when they claimed their rewards earlier
 (commit-tx)
 
-;Emily stakes 100 kda
+;Emily trys to stake 100 kda but cannot because the pool is still deactivated and exhausted
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-05-01T00:00:00Z") })
 (test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
 (test.kadena-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0)
 (commit-tx)
 
-;Emily claims 10 rewards 1 day later
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-05-02T00:00:01Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" false)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;Emily claims 20 rewards 2 days later and unstakes 100 coin
-(begin-tx)
-(env-chain-data { "block-time" : (time "2023-05-04T00:00:02Z") })
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(test.kadena-stake-fungiv2.claim "test-pool" "k:emily" true)
-(test.kadena-stake-fungiv2.get-pool-info "test-pool")
-(commit-tx)
-
-;Kitty stakes 100 kda 10 days later
+;Kitty trys to stake 100 kda but cannot because the pool is still deactivated and exhausted
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-05-14T00:00:03Z") })
 (test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
 (test.kadena-stake-fungiv2.create-stake "test-pool" "k:kitty" 100.0)
 (commit-tx)
 
-;Kitty claims 10 rewards 1 day later
+;Kitty trys to claim but cannot because the pool is still deactivated and exhausted
 (begin-tx)
 (env-chain-data { "block-time" : (time "2023-05-15T00:00:04Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (test.kadena-stake-fungiv2.claim "test-pool" "k:kitty" false)
 (test.kadena-stake-fungiv2.get-pool-info "test-pool")
 (commit-tx)
+;Emily is due 0 rewards because all the rewards are owed already - correct
+;Paid: 50 - Correct, the pool has paid out 150 rewards
+;Balance: 0 - Correct, the pool has paid out all its rewards
+;Stakers: 0 - Correct, all stakers have left the pool
+
+;///////////////////////////////////////////////////////////////////////////////////////
+
+;VARIABLE APY TEST POOL 2
+
+;///////////////////////////////////////////////////////////////////////////////////////
+
+;HERE WE TEST A STAKER WHO STAKES, EARNS REWARDS, BUT DOESNT CLAIM THEM FOR A LONG TIME
+;THE POOL SHOULD NOT ALLOW STAKERS IF ITS EMITTED ALL REWARDS EVEN IF NOONE HAS CLAIMED THEM!
+
+;Test create pool 'test-pool2' with k:stuart for 50 KDA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-pool2" 50.0))
+(env-chain-data { "block-time" : (time "2030-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2.create-pool
+    "test-pool2"
+    "Test Pool2"
+    10.0
+    50.0
+    coin
+    coin
+    "k:stuart"
+    50.0
+    0.0
+    50.0
+    86400.0
+    10.0
+    86400.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool2")
+(commit-tx)
+;A pool is created with 50 KDA rewards
+;The pool will distribute 10 rewards every 86400.0 seconds (1 day)
+;pool multiplier: 1.0
+
+;Emily stakes 100 kda
+(begin-tx)
+(coin.get-balance "k:emily")
+(env-chain-data { "block-time" : (time "2030-05-01T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:emily" "test-pool2" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool2" "k:emily" 100.0)
+(coin.get-balance "k:emily")
+(commit-tx)
+
+;Kitty trys stake 100 kda after pool has emitted all rewards, but noone has claimed them
+(begin-tx)
+(env-chain-data { "block-time" : (time "2030-05-06T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool2" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool2" "k:kitty" 100.0)
+(commit-tx)
+;Kitty cannot stake
+
+;Emily claims her 50 rewards a month later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2030-06-02T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool2")
+(test.kadena-stake-fungiv2.claim "test-pool2" "k:emily" true)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool2")
+(commit-tx)
+;Correct!
+
+;THE POOL REFUSES THE NEW STAKER AND REWARDS THE OLD STAKER PROPERLY
+
+
+;///////////////////////////////////////////////////////////////////////////////////////
+
+;VARIABLE APY TEST POOL 3
+
+;///////////////////////////////////////////////////////////////////////////////////////
+
+;HERE WE TEST A STAKER WHO STAKES, EARNS REWARDS, BUT DOESNT CLAIM THEM FOR A LONG TIME
+;THE POOL SHOULD NOT ALLOW STAKERS IF ITS EMITTED ALL REWARDS EVEN IF NOONE HAS CLAIMED THEM!
+
+;Test create pool 'test-pool2' with k:stuart for 50 KDA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-pool3" 50.0))
+(env-chain-data { "block-time" : (time "2040-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2.create-pool
+    "test-pool3"
+    "Test Pool3"
+    10.0
+    50.0
+    coin
+    coin
+    "k:stuart"
+    50.0
+    0.0
+    50.0
+    86400.0
+    10.0
+    86400.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(commit-tx)
+;A pool is created with 50 KDA rewards
+;The pool will distribute 10 rewards every 86400.0 seconds (1 day)
+;pool multiplier: 1.0
+
+;Emily stakes 100 kda
+(begin-tx)
+(coin.get-balance "k:emily")
+(env-chain-data { "block-time" : (time "2040-05-01T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:emily" "test-pool3" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool3" "k:emily" 100.0)
+(coin.get-balance "k:emily")
+(commit-tx)
+;Emily stakes 100 kda
+
+;Emily claims her 20 rewards 2 days after staking - correct
+(begin-tx)
+(env-chain-data { "block-time" : (time "2040-05-03T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(test.kadena-stake-fungiv2.claim "test-pool3" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(commit-tx)
+;;Emily claims her 20 rewards 2 days after staking - correct
+
+;Stuart adds 50KDA more to the pool
+(begin-tx)
+(env-chain-data { "block-time" : (time "2040-05-03T00:00:02Z") })
+(test-capability (coin.TRANSFER "k:stuart" "test-pool3" 50.0))
+(test.kadena-stake-fungiv2.add-balance-to-pool "test-pool3" "k:stuart" 50.0)
+(commit-tx)
+
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2040-05-04T00:00:02Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(test.kadena-stake-fungiv2.claim "test-pool3" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2040-05-05T00:00:03Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(test.kadena-stake-fungiv2.claim "test-pool3" "k:emily" false)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool3")
+(commit-tx)
+
+
+;Kitty stakes 100 kda
+(begin-tx)
+(coin.get-balance "k:kitty")
+(env-chain-data { "block-time" : (time "2040-05-07T00:00:00Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool3" 100.0))
+(test.kadena-stake-fungiv2.create-stake "test-pool3" "k:kitty" 100.0)
+(coin.get-balance "k:kitty")
+(commit-tx)
+;Emily stakes 100 kda
+
+;THE POOL REFUSES THE NEW STAKER AND REWARDS THE OLD STAKER PROPERLY
