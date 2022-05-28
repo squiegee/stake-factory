@@ -73,6 +73,7 @@
         withdraw-duration:decimal
         start-balance:decimal
         initialized:bool
+        end-time:time
     )
 
     (defschema pools-usage-schema
@@ -167,7 +168,7 @@
                     "account": account,
                     "active": true,
                     "max-reward-per-account": max-reward-per-account,
-                    "claim-wait-seconds": reward-duration,
+                    "claim-wait-seconds": claim-wait-seconds,
                     "max-reward-per-claim": max-reward-per-claim,
                     "start-time": (at "block-time" (chain-data)),
                     "reward-duration": reward-duration,
@@ -175,7 +176,8 @@
                     "stakers": 0.0,
                     "withdraw-duration": withdraw-duration,
                     "start-balance": balance,
-                    "initialized": false
+                    "initialized": false,
+                    "end-time": (at "block-time" (chain-data))
                 }
             )
             ;Insert pool blank usage
@@ -215,7 +217,8 @@
                           {
                               "balance": (+ (at "balance" pool-data) amount),
                               "start-balance": (+ (at "start-balance" pool-data) amount),
-                              "active": true
+                              "active": true,
+                              "end-time": (calculate-pool-end-time pool-id false true amount)
                           }
                     )
                     (format "Added {} {} rewards to {}" [amount token pool-id])
@@ -285,32 +288,31 @@
                         (update pools-usage pool-id
                             {
                                 "tokens-locked": (+ (at "tokens-locked" pool-usage-data) amount),
-                                "last-updated": (at "block-time" (chain-data))
+                                "last-updated": (if (= (at "active" (read pools pool-id)) true ) (at "block-time" (chain-data)) (at "last-updated" pool-usage-data)  )
                             }
                         )
 
-
-                        ;If this pool is not initialized, initialize it's start-time now
-                        (if (= (at "initialized" pool-data) false)
+                        ;If this pool is not initialized or all stakers left, set it's start-time + end-time now
+                        (if (or (= (at "initialized" pool-data) false) (= (at "stakers" (read pools pool-id)) 0.0 ) )
                           (update pools pool-id
                             {
                               "initialized": true,
                               "start-time": (if (> (at "stakers" pool-data) 0.0)
                                                 (at "start-time" pool-data)
                                                 (at "block-time" (chain-data))
-                                              )
+                                              ),
+                              "end-time": (if (= (at "stakers" (read pools pool-id)) 0.0 ) (calculate-pool-end-time pool-id false false 0.0)  (calculate-pool-end-time pool-id true false 0.0) )
                             }
                           )
                           true
                         )
 
-                        ;If pool has no rewards, deny staker, else make stake transfer
+                        ;If this pool has no rewards to distribute, deny a staker, otherwise make stake transfer
                         (let
                             (
-                                (emitted (calculate-total-emitted-tokens pool-id))
-                                (pool-balance (read pools pool-id ["start-balance"]))
+                                (time-since-end-time (diff-time  (at "block-time" (chain-data)) (at "end-time" (read pools pool-id)) ))
                             )
-                            (if (>= emitted (at "start-balance" (read pools pool-id)) )
+                            (if (>= time-since-end-time 0.0 )
                               (let
                                   (
                                       (EXHAUSTED true)
@@ -336,7 +338,7 @@
                                     )
                                     true
                                   )
-                                  (format "Staked {} {} in pool {} with account {} Emitted:{}" [amount (at "stake-token" pool-data)  pool-id account emitted])
+                                  (format "Staked {} {} in pool {} with account {}" [amount (at "stake-token" pool-data)  pool-id account])
                               )
                             )
                         )
@@ -446,7 +448,7 @@
                                   )
                                 )
                                 ;Now lets transfer the users stake back if we haven't already in the logic above
-                                ;If stake token type is different from reward token type, compose a stake token transfer allowance
+                                ;If stake token type is different from reward token type, compose a single stake token transfer allowance
                                 (if (= (reward-token::details pool-id) (stake-token::details pool-id))
                                   true
                                   (if (= (get-token-key reward-token) (get-token-key stake-token))
@@ -471,7 +473,7 @@
                                 (
                                   (rewardONLY true)
                                 )
-                                ;Here the user is requesting to claim rewards only
+                                ;Compose single token reward type transfer
                                 (if (and (> to-pay 0.0) (= claim-stake false) )
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
                                     (install-capability (reward-token::TRANSFER pool-id account to-pay))
@@ -490,13 +492,18 @@
                           )
 
                           ;Update pool usage data
-                          (update pools-usage pool-id
-                            {
-                                "last-updated": (at "block-time" (chain-data)),
-                                "tokens-locked": (- (at "tokens-locked" pool-usage-data) to-pay-stake),
-                                "paid": (+ (at "paid" pool-usage-data) to-pay),
-                                "multiplier": (calculate-multiplier pool-id)
-                            }
+                          (let
+                                (
+                                  (time-since-end-time (calculate-pool-end-time pool-id true false 0.0))
+                                )
+                                (update pools-usage pool-id
+                                  {
+                                      "last-updated": (at "block-time" (chain-data)),
+                                      "tokens-locked": (- (at "tokens-locked" pool-usage-data) to-pay-stake),
+                                      "paid": (+ (at "paid" pool-usage-data) to-pay),
+                                      "multiplier": (calculate-multiplier pool-id)
+                                  }
+                                )
                           )
 
                           ;Update pool data
@@ -507,6 +514,16 @@
                                 "stakers": (if (> to-pay-stake 0.0) (- (at "stakers" pool-data) 1.0) (at "stakers" pool-data) )
                             }
                           )
+
+                          ;We used to shut down pools when stakers left below:
+                          ; (if (= (at "stakers" (read pools pool-id)) 0.0)
+                          ;     (update pools pool-id
+                          ;       {
+                          ;           "active": false
+                          ;       }
+                          ;     )
+                          ;     true
+                          ; )
 
                           ;Update user stake data
                           (update stakes stake-id
@@ -542,15 +559,32 @@
       (let
               (
 
-                  (pool-data (read pools pool-id ["reward-amount" "reward-duration"]))
+                  (pool-data (read pools pool-id ["reward-amount" "reward-duration" "end-time"]))
                   (pool-usage-data (read pools-usage pool-id ["last-updated" "multiplier" "tokens-locked"]))
               )
-              ;(days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" pool-usage-data)) 86400) 0)  )
               (let
                   (
-                    (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" (read pools-usage pool-id))) (at "reward-duration" pool-data)) 0)  )
+                    (time-since-end-time (diff-time  (at "block-time" (chain-data)) (at "end-time" (read pools pool-id))))
                   )
-                  (+ (at "multiplier" pool-usage-data) (/ (* days-since-last-update (at "reward-amount" pool-data) ) (at "tokens-locked" (read pools-usage pool-id))  ) )
+                  (let
+                      (
+                        (days-since-last-update (floor (/ (diff-time  (at "block-time" (chain-data)) (at "last-updated" (read pools-usage pool-id))) (at "reward-duration" pool-data)) 0)  )
+                        (days-since-end-time (floor (/ (diff-time (at "block-time" (chain-data))  (at "end-time" (read pools pool-id))) (at "reward-duration" pool-data)) 0)  )
+                      )
+                      (let
+                          (
+                            (days-since (- days-since-last-update days-since-end-time) )
+                          )
+                          (let
+                              (
+                                (multiplier (+ (at "multiplier" pool-usage-data) (/ (* (min days-since-last-update (abs days-since)) (at "reward-amount" pool-data) ) (at "tokens-locked" (read pools-usage pool-id))  ) ))
+
+
+                              )
+                              multiplier
+                          )
+                      )
+                  )
               )
       )
     )
@@ -576,8 +610,7 @@
         @doc " Calculates the number of tokens emitted by a pool since it began "
         (let
             (
-                (pool-data (read pools pool-id ["balance" "reward-duration" "reward-amount" "reward-token" "start-time" "start-balance"]))
-                (pool-usage-data (read pools-usage pool-id ["paid"]))
+                (pool-data (read pools pool-id ["reward-duration" "reward-amount" "reward-token" "start-time" "start-balance"]))
             )
             (let
                 (
@@ -591,6 +624,60 @@
                         (max-available (at "start-balance" pool-data))
                     )
                     (if (<= total-available max-available ) total-available max-available)
+                )
+            )
+        )
+    )
+
+    (defun calculate-pool-end-time (pool-id:string do-start-balance:bool do-add-balance:bool amount-to-add:decimal)
+        @doc " Calculates the time at which a pool has emitted all rewards "
+        (let
+            (
+                (pool-data (read pools pool-id ["reward-duration" "reward-amount" "start-balance" "balance" "end-time"]))
+            )
+            (let
+                (
+                    (number-of-reward-durations-add-balance (/ amount-to-add (at "reward-amount" pool-data) ))
+                    (number-of-reward-durations-balance-end-time (/ (at "balance" pool-data) (at "reward-amount" pool-data) ))
+                    (number-of-reward-durations-end-time (/ (at "start-balance" pool-data) (at "reward-amount" pool-data) ))
+
+                )
+                (let
+                    (
+                        (number-of-reward-durations (if (= do-add-balance true)
+                                                      number-of-reward-durations-end-time
+                                                      (if (= do-start-balance true)
+                                                        number-of-reward-durations-end-time
+                                                        number-of-reward-durations-balance-end-time
+                                                      )
+                                                    )
+                        )
+                    )
+                    (let
+                        (
+                            (time-until-exhausted (* (at "reward-duration" pool-data) number-of-reward-durations) )
+                        )
+                        (let
+                            (
+                                (end-time-add-balance (add-time (at "end-time" pool-data) time-until-exhausted))
+                                (end-time-other (add-time (at "block-time" (chain-data)) time-until-exhausted))
+                            )
+                            (let
+                                (
+
+                                    (end-time (if (= do-add-balance true)
+                                                              end-time-add-balance
+                                                              (if (= do-start-balance true)
+                                                                end-time-other
+                                                                end-time-other
+                                                              )
+                                                            )
+                                    )
+                                )
+                                end-time
+                            )
+                      )
+                    )
                 )
             )
         )
@@ -723,6 +810,20 @@
       tokenB:module{fungible-v2}
     )
     (< (format "{}" [tokenA]) (format "{}" [tokenB]))
+  )
+
+  (defun min
+    ( num1
+      num2
+    )
+    (if (is-min num1 num2) num1 num2)
+  )
+
+  (defun is-min
+    ( num1
+      num2
+    )
+    (< num1 num2)
   )
 
   (defun get-token-key
