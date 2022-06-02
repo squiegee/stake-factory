@@ -158,6 +158,19 @@
 (define-namespace 'test (sig-keyset) (sig-keyset))
 (env-data { 'ns: 'test })
 (env-gas 0) (env-gaslog)
+(load "kadena-stake-fungiv2-vesting.pact")
+(env-gaslog)
+(create-table test.kadena-stake-fungiv2-vesting.pools)
+(create-table test.kadena-stake-fungiv2-vesting.pools-usage)
+(create-table test.kadena-stake-fungiv2-vesting.stakes)
+(create-table test.kadena-stake-fungiv2-vesting.pool-user-stats)
+(commit-tx)
+
+;Load Contract + Create Tables
+(begin-tx)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test })
+(env-gas 0) (env-gaslog)
 (load "kadena-stake-fungiv2-variable.pact")
 (env-gaslog)
 (create-table test.kadena-stake-fungiv2.pools)
@@ -165,6 +178,8 @@
 (create-table test.kadena-stake-fungiv2.stakes)
 (create-table test.kadena-stake-fungiv2.pool-user-stats)
 (commit-tx)
+
+
 
 
 ;//////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -996,6 +1011,7 @@
 (test.kadena-stake-fungiv2.get-pool-info "test-pool4")
 (commit-tx)
 
+
 ;Emily claims her 10 rewards a DAY later AND withdraws her stake
 (begin-tx)
 (test.kadena-stake-fungiv2.get-pool-info "test-pool4")
@@ -1010,6 +1026,13 @@
 (test.kadena-stake-fungiv2.get-pool-info "test-pool4")
 (commit-tx)
 ;Correct emily should get all 10 rewards for 1 day staking alone
+
+(begin-tx)
+(test.kadena-stake-fungiv2.get-pool-info "test-pool4")
+(test.kadena-stake-fungiv2.absorb-new-tokens "test-pool4")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool4")
+(commit-tx)
+
 
 ;THERE ARE NOW 0 STAKERS IN THE POOL FOR 7 DAYS
 
@@ -1517,6 +1540,10 @@
 (commit-tx)
 ;Emily withdraws and claims rewards - correct
 
+(begin-tx)
+(test.kadena-stake-fungiv2.absorb-new-tokens "test-pool7")
+(commit-tx)
+
 ;Kitty withdraws his rewards and stake
 (begin-tx)
 (env-chain-data { "block-time" : (time "2080-05-08T00:00:02Z") })
@@ -1533,3 +1560,154 @@
 ;Kitty gets proper rewards, the pool is exhausted, and deactivates - correct
 
 ;//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+;//////////////////////////////////////////////////////////////////////////////////
+;TESTING VESTING POOL + STAKING POOL
+;TEST POOL 8
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;HERE WE TEST OUR ABILITY TO ABSORB NEW TOKENS SENT TO THE POOL BY VESTING POOLS
+;A STAKING POOL IS CREATED THAT EMITS 10 TOKENS PER DAY
+;A VESTING POOL IS CREATED THAT EMITS 10 TOKENS PER DAY TO THE STAKING POOLS ACCOUNT
+;THE STAKING POOL IS THEN CONNECTED TO THE VESTING POOL
+;ONCE CONNECTED THE STAKING POOL WILL AUTO-MIGRATE EMISSIONS FROM VESTING POOL
+
+;Test create STAKING POOL 'test-pool7' with k:stuart for 50 KDA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-pool8" 50.0))
+(env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2.create-pool
+    "test-pool8"
+    "Test Pool8"
+    10.0
+    50.0
+    coin
+    coin
+    "k:stuart"
+    50.0
+    0.0
+    50.0
+    86400.0
+    10.0
+    86400.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+(commit-tx)
+;A pool is created with 50 KDA rewards WHERE stakers stake KDA
+;The pool will distribute 10 rewards every 86400.0 seconds (1 day)
+;pool multiplier: 1.0
+
+;Test create pool VESTING POOL 'test-pool7' with k:stuart for 50 K      DA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-poolV" 200.0))
+(env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "test-poolV"
+    "Test PoolV"
+    50.0
+    coin
+    "k:stuart"
+    50.0
+    0.0
+    50.0
+    86400.0
+    10.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+
+;Pool creator adds staking pool account to vesting pool
+(begin-tx)
+(test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-poolV"))
+(test.kadena-stake-fungiv2-vesting.create-stake "test-poolV" "test-pool8" 100.0)
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+;The vesting pool will now emit its allocations to the staking pool
+
+;Pool creator connects the staking pool to the vesting pool
+(begin-tx)
+(test.kadena-stake-fungiv2.connect-vesting-pool "test-pool8" "test-poolV" true)
+(commit-tx)
+;The staking pool will now claim allocations from the vesting pool
+
+;Emily stakes 100 KDA
+(begin-tx)
+(env-chain-data { "block-time" : (time "2090-04-02T00:00:00Z") })
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+
+
+(test-capability (coin.TRANSFER "k:emily" "test-pool8" 100.0))
+(expect
+  "Staked 100.0 coin in pool test-pool8 with account k:emily"
+  "Staked 100.0 coin in pool test-pool8 with account k:emily"
+  (test.kadena-stake-fungiv2.create-stake "test-pool8" "k:emily" 100.0))
+
+(expect
+    "Staking Pool Balance increases due to vesting pool migration"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2.get-pool-info "test-pool8")) 60.0)
+)
+;
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+
+
+(expect
+    "Vesting pool balance decreases due to migration of funds to staking pool"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 40.0)
+)
+(commit-tx)
+;Emily stakes 100KDA in the staking pool that is connected to a vesting pool
+;Connected pools automatically migrate funds from pool A to pool B when stakers stake or claim
+;Correct - The funds trickle properly from vesting pool to staking pool in the test above
+
+;Emily claims rewards 1 day after staking
+(begin-tx)
+(env-chain-data { "block-time" : (time "2090-04-03T00:00:01Z") })
+(test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+(expect
+  "Rewarded k:emily with 10.000000000000 coin for 100.00% of pool and unstaked 0.0 coin"
+  "Rewarded k:emily with 10.000000000000 coin for 100.00% of pool and unstaked 0.0 coin"
+  (test.kadena-stake-fungiv2.claim "test-pool8" "k:emily" false))
+(test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+(commit-tx)
+;Emily claims 10 KDA as rewards - Correct
+
+; ;MANUAL TRANSFER TESTING
+; ;HERE WE TEST SOMEONE MANUALLY SENDING FUNDS TO A STAKING POOLS ACCOUNT
+; ;THE FUNDS ARE ABSORBED INTO THE STAKING POOLS DISTRIBUTING SCHEDULE
+; ;Test add funds to pool manually via a transfer
+; (begin-tx)
+; (env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+; (coin.get-balance "k:stuart")
+; (coin.get-balance "test-pool8")
+; (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+;
+; (test-capability (coin.TRANSFER "k:stuart" "test-pool8" 50.0))
+;
+; (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+; (coin.transfer "k:stuart" "test-pool8" 50.0)
+; (coin.get-balance "k:stuart")
+; (coin.get-balance "test-pool8")
+; (commit-tx)
+
+; (begin-tx)
+; (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+; (test.kadena-stake-fungiv2-vesting.claim "test-poolV" "test-pool8")
+; (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+; (commit-tx)
+;
+; (begin-tx)
+; (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+; (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+; (test.kadena-stake-fungiv2.absorb-new-tokens "test-pool8")
+; (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+; (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+; (commit-tx)
