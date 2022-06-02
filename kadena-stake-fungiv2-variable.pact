@@ -42,6 +42,19 @@
         )
     )
 
+    (defcap POOL_CREATOR_GUARD(pool-id:string)
+        @doc "Verifies account belongs to pool creator"
+        (let
+                (
+                    (pool-data (read pools pool-id ["account"]))
+                )
+                (enforce-guard
+                    (at "guard" (coin.details (at "account" pool-data) ))
+                )
+        )
+
+    )
+
     (defcap PRIVATE ()
         @doc "Only to be called with private contexts"
         true
@@ -83,6 +96,8 @@
         paid:decimal
         multiplier:decimal
         next-multiplier:decimal
+        has-vesting-connection:bool
+        vesting-pool-id:string
     )
 
     (defschema pools-user-stats-schema
@@ -186,7 +201,9 @@
                 "last-updated": (at "block-time" (chain-data)),
                 "paid": 0.0,
                 "multiplier": 1.0,
-                "next-multiplier": 1.0
+                "next-multiplier": 1.0,
+                "has-vesting-connection": false,
+                "vesting-pool-id": "none"
             })
             ;Return a message
             (format "Created pool {} with {} {}" [name balance reward-token])
@@ -195,7 +212,6 @@
 
     (defun add-balance-to-pool (pool-id:string account:string amount:decimal)
         @doc "Adds more balance to a pool for reward distribution and reactivates a pool - Pool creator only"
-        (with-capability (ACCOUNT_GUARD account)
         (let
                 (
                     (pool-data (read pools pool-id ["account" "reward-token" "balance" "start-balance" "active"]))
@@ -204,8 +220,6 @@
                     (
                         (token:module{fungible-v2} (at "reward-token" pool-data))
                     )
-                    ;Enforce pool owner
-                    (enforce (= (at "account" pool-data) account) "Access prohibited.")
                     ;Enforce active pool
                     (enforce (= (at "active" pool-data) true) "You cannot add rewards to exhausted pools.")
                     ;Enforce token precision
@@ -217,13 +231,71 @@
                           {
                               "balance": (+ (at "balance" pool-data) amount),
                               "start-balance": (+ (at "start-balance" pool-data) amount),
-                              "active": true,
                               "end-time": (calculate-pool-end-time pool-id false true amount)
                           }
                     )
                     (format "Added {} {} rewards to {}" [amount token pool-id])
                 )
         )
+    )
+
+    (defun absorb-new-tokens (pool-id:string)
+        @doc "Absorbs new tokens from a pools account into the pools distribution schedule"
+        (let
+                (
+                    (pool-data (read pools pool-id ["account" "reward-token" "stake-token" "balance" "start-balance" "active"]))
+                    (pool-usage-data (read pools-usage pool-id ["tokens-locked"] ))
+                )
+                (let
+                    (
+                        (reward-token:module{fungible-v2} (at "reward-token" pool-data))
+                        (stake-token:module{fungible-v2} (at "stake-token" pool-data))
+                    )
+                    (let
+                        (
+                            (new-tokens (if (!= (get-token-key reward-token) (get-token-key stake-token))
+                                      (- (reward-token::get-balance pool-id) (at "balance" pool-data) )
+                                      (- (- (reward-token::get-balance pool-id) (at "balance" pool-data) ) (at "tokens-locked" pool-usage-data) )
+                                     )
+                            )
+                        )
+                        ;Enforce active pool
+                        (enforce (= (at "active" pool-data) true) "You cannot add rewards to exhausted pools.")
+                        ;Update pool
+                        (update pools pool-id
+                              {
+                                  "balance": (+ (at "balance" pool-data) new-tokens),
+                                  "start-balance": (+ (at "start-balance" pool-data) new-tokens),
+                                  "end-time": (calculate-pool-end-time pool-id false true new-tokens)
+                              }
+                        )
+                        ;(format "new-tokens: {}" [new-tokens])
+                    )
+
+                )
+        )
+    )
+
+    (defun migrate-vesting-allocations (pool-id:string)
+        @doc "Migrates vesting pool allocations"
+        (let
+                (
+                    (pool-data (read pools pool-id))
+                    (pool-usage-data (read pools-usage pool-id))
+                )
+                (test.kadena-stake-fungiv2-vesting.claim (at "vesting-pool-id" pool-usage-data) pool-id)
+        )
+    )
+
+    (defun connect-vesting-pool (pool-id:string vesting-pool-id:string set-active:bool)
+        @doc "Connects a vesting pool to this staking pool"
+        (with-capability (POOL_CREATOR_GUARD pool-id)
+          (update pools-usage pool-id
+            {
+                "has-vesting-connection": set-active,
+                "vesting-pool-id": vesting-pool-id
+            }
+          )
         )
     )
 
@@ -231,7 +303,18 @@
 
     (defun create-stake (pool-id:string account:string amount:decimal)
         @doc " Creates or adds a stake to a pool for a user, claiming rewards first if they are due"
+        ;Check if this pool can migrate funds from a vesting pool
         (with-capability (ACCOUNT_GUARD account)
+        (if (= (at "has-vesting-connection" (read pools-usage pool-id)) true )
+          (let
+                  (
+                      (hasVEST true)
+                  )
+                  (migrate-vesting-allocations pool-id)
+                  (absorb-new-tokens pool-id)
+          )
+          true
+        )
             (let
                 (
                     (pool-data (read pools pool-id))
@@ -394,8 +477,6 @@
                                           )
                             )
                           )
-                          ;Enforce single tx
-                          ;(enforce (= 1 (length (at "exec-code" (read-msg)))) "One transaction only")
                           ;Enforce account
                           (enforce (= account (at "account" stake)) "Not authorised to claim this stake")
                           ;Enforce balance
@@ -412,8 +493,8 @@
                                 ;Enforce withdraw rules
                                 (if (and (= claim-stake true) (= (at "active" pool-data) true) ) (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-withdraw stake)) (at "withdraw-duration" pool-data) ) "You must wait the full withdraw wait duration before claiming your stake.") true )
                                 ;Now, we should determine if stake token = reward token
-                                ;If so, we compose a single transfer capability to transfer 1 token type back
-                                ;If not, we compose 2 different transfer capabilitys to transfer 2 token types back
+                                ;If so, we compose a single transfer capability to transfer 1 token type back (stake + reward token)
+                                ;If not, we compose 2 different transfer capabilitys to transfer 2 different token types back
                                 (if (= (reward-token::details pool-id) (stake-token::details pool-id))
                                   (if (= (get-token-key reward-token) (get-token-key stake-token))
                                     (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
@@ -492,18 +573,13 @@
                           )
 
                           ;Update pool usage data
-                          (let
-                                (
-                                  (time-since-end-time (calculate-pool-end-time pool-id true false 0.0))
-                                )
-                                (update pools-usage pool-id
+                          (update pools-usage pool-id
                                   {
                                       "last-updated": (at "block-time" (chain-data)),
                                       "tokens-locked": (- (at "tokens-locked" pool-usage-data) to-pay-stake),
                                       "paid": (+ (at "paid" pool-usage-data) to-pay),
                                       "multiplier": (calculate-multiplier pool-id)
                                   }
-                                )
                           )
 
                           ;Update pool data
@@ -514,16 +590,6 @@
                                 "stakers": (if (> to-pay-stake 0.0) (- (at "stakers" pool-data) 1.0) (at "stakers" pool-data) )
                             }
                           )
-
-                          ;We used to shut down pools when stakers left below:
-                          ; (if (= (at "stakers" (read pools pool-id)) 0.0)
-                          ;     (update pools pool-id
-                          ;       {
-                          ;           "active": false
-                          ;       }
-                          ;     )
-                          ;     true
-                          ; )
 
                           ;Update user stake data
                           (update stakes stake-id
@@ -645,7 +711,7 @@
                 (let
                     (
                         (number-of-reward-durations (if (= do-add-balance true)
-                                                      number-of-reward-durations-end-time
+                                                      number-of-reward-durations-add-balance
                                                       (if (= do-start-balance true)
                                                         number-of-reward-durations-end-time
                                                         number-of-reward-durations-balance-end-time
