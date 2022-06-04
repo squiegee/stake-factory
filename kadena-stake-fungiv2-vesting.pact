@@ -5,13 +5,14 @@
 (module kadena-stake-fungiv2-vesting GOVERNANCE "Kadena Stake Factory Fungiible-v2 Vesting Pool- For creating vesting pools where fungible-v2 are emitted over time and transferred to beneficiary accounts."
 
 ;VESTING POOLS EMIT AND DISTRIBUTE FUNGIBLE-V2 TOKEN ALLOCATIONS TO ACCOUNTS DEPENDING ON THEIR WEIGHT IN THE VESTING POOL !
-;THERE CAN ONLY EVER BE 100% WEIGHT IN A POOL WHICH EQUALS 100% OF ALLOCATIONS !
+;THERE CAN ONLY EVER BE 100% WEIGHT IN A POOL WHICH EQUALS 100% OF ALLOCATIONS/DURATION !
 ;WEIGHTS CAN BE ADJUSTED DURING CREATION TO SPLIT REWARD AMONGST BENEFICIARY ACCOUNTS !
-;WEIGHTS ARE BEST SET ONCE! ALL WEIGHTS AFFECT OTHER WEIGHTS !
+;WEIGHTS ARE BEST SET ONCE! ALL WEIGHTS AFFECT OTHER WEIGHTS! USE 1-100 FOR EASY MATH !
 ;ADJUSTING A BENEFICIARYS WEIGHTS AFTER THEY ARE CREATED WILL PAY THE BENEFICIARY ITS CURRENT EMITTED ALLOCATIONS !
 ;VESTING POOLS CAN ALSO BE DEACTIVATED MANUALLY TO RECOVER ALL PLANNED EMISSIONS AND CLOSE THE POOL PERMANENTLY !
+;LOCKED VESTING POOLS CAN NOT BE RECOVERED / DISABLED PERMANENTLY !
 ;+ EQUAL WEIGHT VESTING POOL EXAMPLE:
-;+ YOU CREATE A VESTING POOL THAT EMITS 10 TOKENS PER DAY AND WANT ALL ACCOUNTS TO RECEIVE AN EQUAL SHARE OF EMISSIONS,
+;+ YOU CREATE A VESTING POOL THAT EMITS 10 TOKENS PER DAY AND WANT ALL ACCOUNTS TO RECEIVE AN EQUAL SHARE OF EMISSIONS (3.33 Tokens Per Day),
 ;+ THESE 10 TOKENS PER DAY ARE SPLIT AMONGST ALL ACCOUNTS IN THE VESTING POOL DEPENDING ON THEIR WEIGHT IN THE POOL:
 ;+ USER#1 WITH A WEIGHT OF 100.0 IS ADDED TO POOL AND NOW RECIEVES ALL 10 TOKENS PER DAY.
 ;+ NEXT USER#2 WITH A WEIGHT OF 100.0 IS ADDED TO THE POOL AND BOTH USERS #1 & #2 NOW RECEIVE 5 TOKENS PER DAY.
@@ -78,6 +79,18 @@
       true
     )
 
+    (defcap PRIVATE_RESERVE
+          (id:string pair-key:string)
+        true)
+
+    (defun enforce-private-reserve:bool
+        (id:string pair-key:string)
+      (require-capability (PRIVATE_RESERVE id pair-key)))
+
+    (defun create-pool-guard:guard
+        (id:string pair-key:string)
+      (create-user-guard (enforce-private-reserve id pair-key )))
+
     ;;;;;;;;;; SCHEMAS AND TABLES ;;;;;;;;;;;;;;
     (defschema pools-schema
         @doc "Pool information, a unique id is the key"
@@ -98,6 +111,7 @@
         start-balance:decimal
         initialized:bool
         end-time:time
+        locked:bool
     )
 
     (defschema pools-usage-schema
@@ -123,7 +137,7 @@
         account:string
         rewards:decimal
         last-claimed:time
-        last-withdraw:time
+        withdraw-duration:decimal
         multiplier:decimal
         start-time:time
     )
@@ -148,6 +162,7 @@
     ;max-reward-per-claim: max rewards a beneficiary account can claim per wait duration, ex: 200
     ;reward-duration: time it takes for reward amount to become 100% emitted and available to beneficiarys, ex: 86400
     ;reward-amount: the amount of rewards available each reward-duration, ex: 10
+    ;withdraw-duration: the amount of time in seconds until anyone can begin withdrawing vested tokens from this pool, ex: 0
 
     (defun create-pool (id:string
                         name:string
@@ -158,7 +173,8 @@
                         claim-wait-seconds:decimal
                         max-reward-per-claim:decimal
                         reward-duration:decimal
-                        reward-amount:decimal )
+                        reward-amount:decimal
+                        withdraw-duration:decimal )
 
         @doc "Creates a new pool where Stakers stake and earn fungible-v2 tokens"
         (with-capability (ACCOUNT_GUARD account)
@@ -169,9 +185,9 @@
             (enforce-valid-name name)
             (enforce-unit balance (reward-token::precision))
             ;Create reward token account
-            (reward-token::create-account id (create-module-guard "kadena-stake-holdings"))
+            (reward-token::create-account id (create-pool-guard id (get-token-key reward-token)))
             ;Transfer reward token
-            (reward-token::transfer-create account id (create-module-guard "kadena-stake-holdings") balance)
+            (reward-token::transfer-create account id (create-pool-guard id (get-token-key reward-token)) balance)
             ;Insert pool
             (insert pools id
                 {
@@ -188,10 +204,11 @@
                     "reward-duration": reward-duration,
                     "reward-amount": reward-amount,
                     "stakers": 0.0,
-                    "withdraw-duration": claim-wait-seconds,
+                    "withdraw-duration": withdraw-duration,
                     "start-balance": balance,
                     "initialized": false,
-                    "end-time": (at "block-time" (chain-data))
+                    "end-time": (at "block-time" (chain-data)),
+                    "locked": false
                 }
             )
             ;Insert pool blank usage
@@ -237,7 +254,7 @@
     )
 
     (defun deactivate-pool (pool-id:string account:string)
-        @doc "Deactivates a pool and withdraws all distribution tokens back to pool creator account"
+        @doc "Deactivates a pool and recovers all undistributed tokens back to pool creator account"
         (with-capability (POOL_CREATOR_GUARD pool-id )
         (let
             (
@@ -254,9 +271,12 @@
                     )
                     ;Enforce pool owner
                     (enforce (= (at "account" pool-data) account) "Access prohibited.")
+                    ;Enforce unlocked pool
+                    (enforce (= (at "locked" pool-data) false) "Locked pools may not be recovered.")
                     ;Transfer pool starting stake
                     (install-capability (token::TRANSFER pool-id account to-pay) )
-                    (token::transfer pool-id account to-pay)
+                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key token)) (token::transfer pool-id account to-pay)  )
+                    ;(token::transfer pool-id account to-pay)
                     ;Update pool
                     (update pools pool-id
                       (+
@@ -284,10 +304,35 @@
         )
     )
 
+    (defun lock-pool (pool-id:string account:string)
+        @doc "Permanently locks a vesting pool from being recovered by pool creator"
+        (with-capability (POOL_CREATOR_GUARD pool-id )
+          (let
+              (
+                  (pool-data (read pools pool-id))
+              )
+              ;Enforce pool owner
+              (enforce (= (at "account" pool-data) account) "Access prohibited.")
+              ;Update pool
+              (update pools pool-id
+                    {
+                        "locked": true
+                    }
+              )
+              ;Return a message
+              (format "Locked pool {}" [pool-id])
+          )
+        )
+    )
+
     ;;;;; User Related
 
-    (defun create-stake (pool-id:string account:string amount:decimal)
-        @doc " Creates or adds a distribution allocation to a beneficiary account, transfering the accounts current allocations before so if there are any"
+    ;set-withdraw-duration: true/false if to update this users withdraw-duration (always set to true at first and set a starting withdraw duration, even if its only 0 seconds!)
+    ;withdraw-duration: time in seconds until this user can begin withdrawing, ex: 0 (always set a withdraw duration unless updating the users allocation after it was already set previously)
+
+
+    (defun create-stake (pool-id:string account:string amount:decimal set-withdraw-duration:bool withdraw-duration:decimal)
+        @doc " Creates or adds more distribution allocations to a beneficiary account, transfering the accounts current allocations before so if there are any"
         (with-capability (POOL_CREATOR_GUARD pool-id )
             (let
                 (
@@ -305,8 +350,8 @@
                       (enforce (= (at "active" pool-data) true) "Staking pool is not active.")
                       ;Insert stake data
                       (with-default-read stakes stake-id
-                        { "id" : stake-id, "pool-id" : pool-id, "balance" : 0.0, "last-updated" : (at "block-time" (chain-data)), "account" : account, "rewards" : 0.0, "last-claimed" : (at "block-time" (chain-data)), "last-withdraw": (at "block-time" (chain-data))  }
-                        { "id" := t_id, "pool-id" := t_pool-id, "balance" := t_balance, "last-updated" := t_last-updated, "account" := t_account, "rewards" := t_rewards, "last-claimed" := t_last-claimed, "last-withdraw" := t_last-withdraw }
+                        { "id" : stake-id, "pool-id" : pool-id, "balance" : 0.0, "last-updated" : (at "block-time" (chain-data)), "account" : account, "rewards" : 0.0, "last-claimed" : (at "block-time" (chain-data)), "withdraw-duration": withdraw-duration  }
+                        { "id" := t_id, "pool-id" := t_pool-id, "balance" := t_balance, "last-updated" := t_last-updated, "account" := t_account, "rewards" := t_rewards, "last-claimed" := t_last-claimed, "withdraw-duration" := t_withdraw-duration }
 
                         ;If this is not the first beneficiary, update the pools emissions multiplier
                         (if (> (at "stakers" pool-data) 0.0)
@@ -325,13 +370,13 @@
                         (write stakes stake-id {
                             "id": t_id,
                             "pool-id": t_pool-id,
-                            "balance": (+ t_balance amount),
+                            "balance": amount,
                             "last-updated": (at "block-time" (chain-data)),
                             "account": t_account,
                             "rewards": t_rewards,
                             "last-claimed": t_last-claimed,
-                            "last-withdraw": t_last-withdraw, ;If this is not the first beneficiary, calculate a new multiplier
-                            "multiplier": (if (> (at "stakers" pool-data) 0.0)
+                            "withdraw-duration": (if (= set-withdraw-duration true) withdraw-duration t_withdraw-duration ),
+                            "multiplier": (if (> (at "stakers" pool-data) 0.0) ;If this is not the first beneficiary, calculate a new multiplier
                                             (calculate-multiplier pool-id)
                                             (at "multiplier" pool-usage-data)
                                           ),
@@ -406,8 +451,8 @@
     )
 
     (defun claim (pool-id:string account:string)
-        @doc "Transfers a beneficiarys current allocation or deletes a beneficiarys allocations from a pool"
-        (with-capability (ACCOUNT_GUARD account)
+        @doc "Transfers a beneficiarys current allocation from a pool"
+        ;(with-capability (ACCOUNT_GUARD account)
         (with-default-read stakes (get-stake-id-key account pool-id)
           { "account" : 'nonulls, "balance" : 0.0 }
           { "account" := t_account, "balance" := t_balance }
@@ -445,7 +490,11 @@
                           ;Enforce balance
                           (enforce (>= to-pay 0.0) "There are no allocations to claim for this account.")
                           ;Enforce claim allocation duration
-                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) ) "This account must wait the full claim allocation duration before it can claim it's allocations.") )
+                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) ) "This account must wait the full claim wait duration before it can claim allocations.") )
+                          ;Enforce pool withdraw duration
+                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'start-time pool-data)) (at "withdraw-duration" pool-data) ) "This pools withdraw actions are still locked under a withdraw wait duration.") )
+                          ;Enforce user withdraw duration
+                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'start-time stake)) (at "withdraw-duration" stake) ) "This account's withdraw actions are still locked under a withdraw wait duration.") )
 
                           (let
                                 (
@@ -462,8 +511,8 @@
                                 ;Transfer back the allocation amount composed above
                                 (if (> to-pay 0.0)
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (reward-token::transfer pool-id account to-pay)
-                                    (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                   )
                                 true)
                           )
@@ -489,10 +538,9 @@
                           (update stakes stake-id
                             {
                               "last-updated":  (at "block-time" (chain-data)),
-                              "rewards": (- to-pay-max to-pay),
+                              "rewards": (+ (at "rewards" stake) to-pay),
                               "last-claimed":  (at "block-time" (chain-data)),
-                              "multiplier": (at "multiplier" (read pools-usage pool-id)),
-                              "last-withdraw": (at "block-time" (chain-data))
+                              "multiplier": (at "multiplier" (read pools-usage pool-id))
                               }
                           )
 
@@ -507,7 +555,7 @@
           (format "{} has no token emissions to claim in {}" [account pool-id]))
         )
 
-        )
+        ;)
     )
 
     (defun remove-account (pool-id:string account:string pay-out:bool)
@@ -567,8 +615,8 @@
                                 ;Transfer back the allocation amount composed above
                                 (if (> to-pay 0.0)
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (reward-token::transfer pool-id account to-pay)
-                                    (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                   )
                                 true)
                             )
@@ -607,8 +655,7 @@
                               "rewards": (- to-pay-max to-pay),
                               "balance": (-(at "balance" stake) to-pay-stake),
                               "last-claimed":  (at "block-time" (chain-data)),
-                              "multiplier": (at "multiplier" (read pools-usage pool-id)),
-                              "last-withdraw": (if (= pay-out true) (at "block-time" (chain-data)) (at "last-withdraw" stake) )
+                              "multiplier": (at "multiplier" (read pools-usage pool-id))
                               }
                           )
 
@@ -894,6 +941,11 @@
     (< (format "{}" [tokenA]) (format "{}" [tokenB]))
   )
 
+  (defun format-token:string
+    ( token:module{fungible-v2} )
+    (format "{}" [token])
+  )
+
   (defun min
     ( num1
       num2
@@ -916,7 +968,7 @@
 
   (defun initialize ()
     @doc " Initialize the contract. Can only happen once. "
-    (coin.create-account KDS_BANK (create-module-guard "kadena-stake-holdings"))
+    (coin.create-account KDS_BANK (create-module-guard "kadena-stake-tokens-bank"))
   )
 
 )
