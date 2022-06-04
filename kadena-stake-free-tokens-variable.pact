@@ -1,5 +1,3 @@
-;(enforce-pact-version "3.7")
-
 (namespace (read-msg 'ns))
 
 (module kadena-stake-tokens GOVERNANCE "Kadena Stake Factory free.tokens - For creating pools where free.tokens LP tokens are staked for fungible-v2 token rewards"
@@ -23,9 +21,6 @@
 
     (defconst NAME_MAX_LENGTH 30
       " Maximum character length for account IDs. ")
-
-    ;Warning - This is an ambiguous module guard
-    ;(defun kadena-stake-vault-guard:guard () (create-module-guard "kadena-stake-holdings"))
 
     ;;;;; CAPABILITIES
 
@@ -51,6 +46,31 @@
       @doc " Capability to perform UPDATEing operations. "
       true
     )
+
+    (defcap PRIVATE_RESERVE
+          (id:string pair-key:string)
+        true)
+
+    (defun enforce-private-reserve:bool
+        (id:string pair-key:string)
+      (require-capability (PRIVATE_RESERVE id pair-key)))
+
+    (defun create-pool-guard:guard
+        (id:string pair-key:string)
+      (create-user-guard (enforce-private-reserve id pair-key)))
+
+
+    (defcap PRIVATE_LP_RESERVE
+          (id:string pair-key:string)
+        true)
+
+    (defun enforce-private-lp-reserve:bool
+        (id:string pair-key:string)
+      (require-capability (PRIVATE_LP_RESERVE id pair-key)))
+
+    (defun create-lp-guard:guard
+        (id:string pair-key:string)
+      (create-user-guard (enforce-private-lp-reserve id pair-key)))
 
     ;;;;;;;;;; SCHEMAS AND TABLES ;;;;;;;;;;;;;;
     (defschema pools-schema
@@ -159,11 +179,12 @@
             (enforce-valid-name name)
             (enforce-unit balance (reward-token::precision))
             ;Create reward token account
-            (reward-token::create-account id (create-module-guard "kadena-stake-holdings"))
+            ;(reward-token::create-account id (create-module-guard "kadena-stake-holdings"))
+            (reward-token::create-account id (create-pool-guard id (get-token-key reward-token)))
             ;Transfer reward token
-            (reward-token::transfer-create account id (create-module-guard "kadena-stake-holdings") balance)
+            (reward-token::transfer-create account id (create-pool-guard id (get-token-key reward-token)) balance)
             ;Create stake token free.toknes account
-            (test.tokens.create-account (get-pair-key stake-token1 stake-token2) id (create-module-guard "kadena-stake-holdings"))
+            (test.tokens.create-account (get-pair-key stake-token1 stake-token2) id (create-lp-guard id (get-pair-key stake-token1 stake-token2)) )
             ;Insert pool
             (insert pools id
                 {
@@ -411,8 +432,6 @@
                                           )
                             )
                           )
-                          ;Enforce single tx
-                          ;(enforce (= 1 (length (at "exec-code" (read-msg)))) "One transaction only")
                           ;Enforce account
                           (enforce (= account (at "account" stake)) "Not authorised to claim this stake")
                           ;Enforce balance
@@ -430,13 +449,23 @@
                                 (if (and (= claim-stake true) (= (at "active" pool-data) true) ) (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-withdraw stake)) (at "withdraw-duration" pool-data) ) "You must wait the full withdraw wait duration before claiming your stake.") true )
                                 ;Transfer stake back to user
                                 (install-capability (test.tokens.TRANSFER (get-pair-key lp-token1 lp-token2) pool-id account to-pay-stake))
-                                (test.tokens.transfer (get-pair-key lp-token1 lp-token2) pool-id account to-pay-stake)
+                                (with-capability (PRIVATE_LP_RESERVE pool-id (get-pair-key lp-token1 lp-token2)) (test.tokens.transfer (get-pair-key lp-token1 lp-token2) pool-id account to-pay-stake)  )
 
-                                ;Transfer rewards to user
-                                (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                      (install-capability (reward-token::TRANSFER pool-id account (+ to-pay-stake to-pay)))
-                                      (install-capability (reward-token::TRANSFER pool-id account (+ to-pay-stake (at "balance" pool-data))))
-                                )
+                                ;Compose rewards transfer allowance
+                                (if (> to-pay 0.0)
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                    (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                    (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                  )
+                                true)
+
+                                ;Transfer rewards to user using the above allowance
+                                (if (> to-pay 0.0)
+                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
+                                  )
+                                true)
 
                                 ;Update user stake stats
                                 (update stakes stake-id  {"last-updated":  (at "block-time" (chain-data)), "balance": (-(at "balance" stake) to-pay-stake), "last-withdraw":  (at "block-time" (chain-data)) })
@@ -448,7 +477,7 @@
                                   (rewardONLY true)
                                 )
                                 ;Compose single token reward type transfer
-                                (if (and (> to-pay 0.0) (= claim-stake false) )
+                                (if (> to-pay 0.0)
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
                                     (install-capability (reward-token::TRANSFER pool-id account to-pay))
                                     (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
@@ -457,8 +486,8 @@
                                 ;Transfer back the reward token amount composed above if any rewards are owed to the user
                                 (if (> to-pay 0.0)
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (reward-token::transfer pool-id account to-pay)
-                                    (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                   )
                                 true)
                               )
@@ -466,18 +495,13 @@
                           )
 
                           ;Update pool usage data
-                          (let
-                                (
-                                  (time-since-end-time (calculate-pool-end-time pool-id true false 0.0))
-                                )
-                                (update pools-usage pool-id
+                          (update pools-usage pool-id
                                   {
                                       "last-updated": (at "block-time" (chain-data)),
                                       "tokens-locked": (- (at "tokens-locked" pool-usage-data) to-pay-stake),
                                       "paid": (+ (at "paid" pool-usage-data) to-pay),
                                       "multiplier": (calculate-multiplier pool-id)
                                   }
-                                )
                           )
 
                           ;Update pool data
@@ -489,21 +513,11 @@
                             }
                           )
 
-                          ;We used to shut down pools when stakers left below:
-                          ; (if (= (at "stakers" (read pools pool-id)) 0.0)
-                          ;     (update pools pool-id
-                          ;       {
-                          ;           "active": false
-                          ;       }
-                          ;     )
-                          ;     true
-                          ; )
-
                           ;Update user stake data
                           (update stakes stake-id
                             {
                               "last-updated":  (at "block-time" (chain-data)),
-                              "rewards": (- to-pay-max to-pay),
+                              "rewards": (+ (at "rewards" stake) to-pay),
                               "last-claimed":  (at "block-time" (chain-data)),
                               "multiplier": (at "multiplier" (read pools-usage pool-id)),
                               "last-withdraw": (if (> to-pay-stake 0.0) (at "block-time" (chain-data)) (at "last-withdraw" stake) )
@@ -619,7 +633,7 @@
                 (let
                     (
                         (number-of-reward-durations (if (= do-add-balance true)
-                                                      number-of-reward-durations-end-time
+                                                      number-of-reward-durations-add-balance
                                                       (if (= do-start-balance true)
                                                         number-of-reward-durations-end-time
                                                         number-of-reward-durations-balance-end-time
@@ -784,6 +798,11 @@
       tokenB:module{fungible-v2}
     )
     (< (format "{}" [tokenA]) (format "{}" [tokenB]))
+  )
+
+  (defun format-token:string
+    ( token:module{fungible-v2} )
+    (format "{}" [token])
   )
 
   (defun min
