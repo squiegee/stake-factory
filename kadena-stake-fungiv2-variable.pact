@@ -65,6 +65,18 @@
       true
     )
 
+    (defcap PRIVATE_RESERVE
+          (id:string pair-key:string)
+        true)
+
+    (defun enforce-private-reserve:bool
+        (id:string pair-key:string)
+      (require-capability (PRIVATE_RESERVE id pair-key)))
+
+    (defun create-pool-guard:guard
+        (id:string pair-key:string)
+      (create-user-guard (enforce-private-reserve id pair-key)))
+
     ;;;;;;;;;; SCHEMAS AND TABLES ;;;;;;;;;;;;;;
     (defschema pools-schema
         @doc "Pool information, a unique id is the key"
@@ -166,11 +178,11 @@
             (enforce-valid-name name)
             (enforce-unit balance (reward-token::precision))
             ;Create reward token account
-            (reward-token::create-account id (create-module-guard "kadena-stake-holdings"))
+            (reward-token::create-account id (create-pool-guard id (get-token-key reward-token)))
             ;Transfer reward token
-            (reward-token::transfer-create account id (create-module-guard "kadena-stake-holdings") balance)
+            (reward-token::transfer-create account id (create-pool-guard id (get-token-key reward-token)) balance)
             ;If reward-token != stake-token then create a token account for stake-token too
-            (if (= (get-token-key reward-token) (get-token-key stake-token)) true (stake-token::create-account id (create-module-guard "kadena-stake-holdings")) )
+            (if (= (get-token-key reward-token) (get-token-key stake-token)) true (stake-token::create-account id (create-pool-guard id (get-token-key stake-token))) )
             ;Insert pool
             (insert pools id
                 {
@@ -515,17 +527,17 @@
                                 (if (= (reward-token::details pool-id) (stake-token::details pool-id))
                                   (if (= (get-token-key reward-token) (get-token-key stake-token))
                                     (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                      (reward-token::transfer pool-id account (+ to-pay-stake to-pay))
-                                      (reward-token::transfer pool-id account (+ to-pay-stake (at "balance" pool-data)))
+                                      (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account (+ to-pay-stake to-pay))  )
+                                      (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account (+ to-pay-stake (at "balance" pool-data)))  )
                                     )
                                     (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                      (reward-token::transfer pool-id account to-pay )
-                                      (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                      (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account to-pay )  )
+                                      (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                     )
                                   )
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                      (reward-token::transfer pool-id account to-pay )
-                                      (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account to-pay )  )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token) ) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                   )
                                 )
                                 ;Now lets transfer the users stake back if we haven't already in the logic above
@@ -542,7 +554,8 @@
                                   true
                                   (if (= (get-token-key reward-token) (get-token-key stake-token))
                                     true
-                                    (stake-token::transfer pool-id account to-pay-stake)
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key stake-token) ) (stake-token::transfer pool-id account to-pay-stake)  )
+                                    ;(stake-token::transfer pool-id account to-pay-stake)
                                   )
                                 )
                                 ;Update user stake stats
@@ -564,8 +577,8 @@
                                 ;Transfer back the reward token amount composed above if any rewards are owed to the user
                                 (if (> to-pay 0.0)
                                   (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (reward-token::transfer pool-id account to-pay)
-                                    (reward-token::transfer pool-id account (at "balance" pool-data) )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
                                   )
                                 true)
                               )
@@ -595,7 +608,7 @@
                           (update stakes stake-id
                             {
                               "last-updated":  (at "block-time" (chain-data)),
-                              "rewards": (- to-pay-max to-pay),
+                              "rewards": (+ (at "rewards" stake) to-pay),
                               "last-claimed":  (at "block-time" (chain-data)),
                               "multiplier": (at "multiplier" (read pools-usage pool-id)),
                               "last-withdraw": (if (> to-pay-stake 0.0) (at "block-time" (chain-data)) (at "last-withdraw" stake) )
@@ -876,6 +889,11 @@
       tokenB:module{fungible-v2}
     )
     (< (format "{}" [tokenA]) (format "{}" [tokenB]))
+  )
+
+  (defun format-token:string
+    ( token:module{fungible-v2} )
+    (format "{}" [token])
   )
 
   (defun min
