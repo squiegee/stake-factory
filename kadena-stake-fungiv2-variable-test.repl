@@ -1202,6 +1202,7 @@
 
 ;Emily claims her 15 rewards 2 days after staking total, with 1 day with kitty in the pool
 (begin-tx)
+(coin.get-balance "k:emily")
 (env-chain-data { "block-time" : (time "2060-05-03T00:00:00Z") })
 (test.kadena-stake-fungiv2.get-pool-info "test-pool5")
 (expect
@@ -1216,7 +1217,7 @@
     35.00
     (test.anedak.get-balance "test-pool5")
 )
-
+(coin.get-balance "k:emily")
 (commit-tx)
 ;Correct!
 
@@ -1624,6 +1625,7 @@
 
 ;Pool creator adds staking pool account to vesting pool
 (begin-tx)
+(use test.kadena-stake-fungiv2-vesting)
 (test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-poolV"))
 (test.kadena-stake-fungiv2-vesting.create-stake "test-poolV" "test-pool8" 100.0)
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
