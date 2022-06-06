@@ -228,15 +228,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool"
     "Test Pool"
-    10.0
     50.0
     coin
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -800,15 +797,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool2"
     "Test Pool2"
-    10.0
     50.0
     coin
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -879,15 +873,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool3"
     "Test Pool3"
-    10.0
     50.0
     coin
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1008,15 +999,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool4"
     "Test Pool4"
-    10.0
     50.0
     coin
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1154,15 +1142,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool5"
     "Test Pool5"
-    10.0
     50.0
     test.anedak
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1303,15 +1288,12 @@
 (test.kadena-stake-tokens.create-pool
     "test-pool7"
     "Test Pool7"
-    10.0
     50.0
     coin
     coin
     coin
     "k:stuart"
-    50.0
     172800.0
-    50.0
     86400.0
     10.0
     604800.0
@@ -1412,4 +1394,4 @@
 (commit-tx)
 ;Kitty gets proper rewards, the pool is exhausted, and deactivates - correct
 
-;///////////////////////////////////////////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////////////////////////////////////////
