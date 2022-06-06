@@ -2,7 +2,7 @@
 
 (namespace (read-msg 'ns))
 
-(module kadena-stake-fungiv2 GOVERNANCE "Kadena Stake Factory Fungiible-v2 - For creating pools where fungible-v2 tokens are staked for fungible-v2 token rewards"
+(module kadena-stake-polyfungiv1-fungiv2 GOVERNANCE "Kadena Stake Factory Fungiible-v2 - For creating pools where fungible-v2 tokens are staked for fungible-v2 token rewards"
 
     ;;;;; CONSTANTS
     (defconst KDS_BANK:string "kadena-stake-fungiv2-bank")
