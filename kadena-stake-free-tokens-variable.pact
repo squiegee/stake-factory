@@ -77,14 +77,11 @@
         @doc "Pool information, a unique id is the key"
         id:string
         name:string
-        apy:decimal
         balance:decimal
         reward-token:module{fungible-v2}
         account:string
         active:bool
-        max-reward-per-account:decimal
         claim-wait-seconds:decimal
-        max-reward-per-claim:decimal
         start-time:time
         reward-duration:decimal
         reward-amount:decimal
@@ -143,29 +140,23 @@
     ;id: id of pool, ex: "test-pool"
     ;name: name of pool, ex: "Test Pool"
     ;balance: amount of reward token given by pool owner to be distributed to stakers, ex: 200
-    ;apy: constant apy of pool reward, ex: 10.0
     ;reward-token: name of fungible-v2 reward token provided by pool creator, ex: coin
     ;stake-token1- name of fungible-v2 token which is first side of LP pair, ex: coin
     ;stake-token2- name of fungible-v2 token which is second side of LP pair, ex: coin
     ;account: pool creator account, ex: k:mykaccount
-    ;max-reward-per-account: max rewards a stakers account can ever claim in the pool, ex: 200
     ;claim-wait-seconds: minimum number of seconds between staker reward claims, ex: 0
-    ;max-reward-per-claim: max rewards a staker account can claim per wait duration, ex: 200
-    ;reward-duration: if apy is not fixed, this is time it takes for rewards to become available to stakers, ex: 86400
-    ;reward-amount: if apy is not fixed, this is the amount of rewards available each reward-duration, ex: 10
+    ;reward-duration:  time it takes for rewards to become available to stakers, ex: 86400
+    ;reward-amount:the amount of rewards available each reward-duration, ex: 10
     ;withdraw-duration: time in seconds a staker's tokens must be locked before a staker can withdraw
 
     (defun create-pool (id:string
                         name:string
-                        apy:decimal
                         balance:decimal
                         reward-token:module{fungible-v2}
                         stake-token1:module{fungible-v2}
                         stake-token2:module{fungible-v2}
                         account:string
-                        max-reward-per-account:decimal
                         claim-wait-seconds:decimal
-                        max-reward-per-claim:decimal
                         reward-duration:decimal
                         reward-amount:decimal
                         withdraw-duration:decimal )
@@ -190,14 +181,11 @@
                 {
                     "id": id,
                     "name": name,
-                    "apy": apy,
                     "balance": balance,
                     "reward-token": reward-token,
                     "account": account,
                     "active": true,
-                    "max-reward-per-account": max-reward-per-account,
                     "claim-wait-seconds": claim-wait-seconds,
-                    "max-reward-per-claim": max-reward-per-claim,
                     "start-time": (at "block-time" (chain-data)),
                     "reward-duration": reward-duration,
                     "reward-amount": reward-amount,
@@ -414,14 +402,8 @@
                       (let
                           (
                             (to-pay (if (>= (- available to-pay-max ) 0.0)
-                                      (if (> to-pay-max (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        to-pay-max
-                                      )
-                                      (if (> (at "balance" pool-data) (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        (at "balance" pool-data)
-                                      )
+                                      to-pay-max
+                                      available
                                     )
                             )
                             (to-pay-stake (if (or
