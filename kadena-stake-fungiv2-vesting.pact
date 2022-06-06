@@ -69,6 +69,16 @@
 
     )
 
+    (defcap HASVEST (pool-id)
+        @doc "Capability to perform vesting migrations"
+        (let
+                (
+                    (pool-usage-data (read pools-usage pool-id))
+                )
+                (= (at "has-vesting-connection" pool-usage-data) true)
+        )
+    )
+
     (defcap PRIVATE ()
         @doc "Only to be called with private contexts"
         true
@@ -102,7 +112,6 @@
         active:bool
         max-reward-per-account:decimal
         claim-wait-seconds:decimal
-        max-reward-per-claim:decimal
         start-time:time
         reward-duration:decimal
         reward-amount:decimal
@@ -121,6 +130,8 @@
         paid:decimal
         multiplier:decimal
         next-multiplier:decimal
+        has-vesting-connection:bool
+        vesting-pool-id:string
     )
 
     (defschema pools-user-stats-schema
@@ -140,6 +151,7 @@
         withdraw-duration:decimal
         multiplier:decimal
         start-time:time
+        max-rewards:decimal
     )
 
     (deftable pools:{pools-schema})
@@ -159,7 +171,6 @@
     ;account: pool creator account, ex: k:mykaccount
     ;max-reward-per-account: max rewards a beneficiary account can ever claim in the pool, ex: 200
     ;claim-wait-seconds: minimum number of seconds between beneficary allocation claims, ex: 0
-    ;max-reward-per-claim: max rewards a beneficiary account can claim per wait duration, ex: 200
     ;reward-duration: time it takes for reward amount to become 100% emitted and available to beneficiarys, ex: 86400
     ;reward-amount: the amount of rewards available each reward-duration, ex: 10
     ;withdraw-duration: the amount of time in seconds until anyone can begin withdrawing vested tokens from this pool, ex: 0
@@ -171,7 +182,6 @@
                         account:string
                         max-reward-per-account:decimal
                         claim-wait-seconds:decimal
-                        max-reward-per-claim:decimal
                         reward-duration:decimal
                         reward-amount:decimal
                         withdraw-duration:decimal )
@@ -199,7 +209,6 @@
                     "active": true,
                     "max-reward-per-account": max-reward-per-account,
                     "claim-wait-seconds": claim-wait-seconds,
-                    "max-reward-per-claim": max-reward-per-claim,
                     "start-time": (at "block-time" (chain-data)),
                     "reward-duration": reward-duration,
                     "reward-amount": reward-amount,
@@ -217,7 +226,9 @@
                 "last-updated": (at "block-time" (chain-data)),
                 "paid": 0.0,
                 "multiplier": 1.0,
-                "next-multiplier": 1.0
+                "next-multiplier": 1.0,
+                "has-vesting-connection": false,
+                "vesting-pool-id": "none"
             })
             ;Return a message
             (format "Created pool {} with {} {}" [name balance reward-token])
@@ -325,15 +336,88 @@
         )
     )
 
+    (defun absorb-new-tokens (pool-id:string)
+        @doc "Absorbs new tokens from a pools account into the pools distribution schedule"
+        (let
+                (
+                    (pool-data (read pools pool-id ["account" "reward-token" "balance" "start-balance" "active"]))
+                    (pool-usage-data (read pools-usage pool-id ["tokens-locked"] ))
+                )
+                (let
+                    (
+                        (reward-token:module{fungible-v2} (at "reward-token" pool-data))
+                    )
+                    (let
+                        (
+                            (new-tokens (- (reward-token::get-balance pool-id) (at "balance" pool-data) )
+                            )
+                        )
+                        ;Enforce active pool
+                        (enforce (= (at "active" pool-data) true) "You cannot add rewards to exhausted pools.")
+                        ;Update pool
+                        (update pools pool-id
+                              {
+                                  "balance": (+ (at "balance" pool-data) new-tokens),
+                                  "start-balance": (+ (at "start-balance" pool-data) new-tokens),
+                                  "end-time": (calculate-pool-end-time pool-id false true new-tokens)
+                              }
+                        )
+                        (format "Absorbed {} reward-tokens into pool {}" [new-tokens pool-id])
+                    )
+
+                )
+        )
+    )
+
+    (defun migrate-vesting-allocations (pool-id:string)
+        @doc "Migrates vesting pool allocations"
+        (let
+                (
+                    (pool-data (read pools pool-id))
+                    (pool-usage-data (read pools-usage pool-id))
+                )
+                (claim-vest (at "vesting-pool-id" pool-usage-data) pool-id)
+        )
+    )
+
+    (defun connect-vesting-pool (pool-id:string vesting-pool-id:string set-active:bool)
+        @doc "Connects a vesting pool to this staking pool"
+        (with-capability (POOL_CREATOR_GUARD pool-id)
+          (update pools-usage pool-id
+            {
+                "has-vesting-connection": set-active,
+                "vesting-pool-id": vesting-pool-id
+            }
+          )
+        )
+    )
+
     ;;;;; User Related
 
     ;set-withdraw-duration: true/false if to update this users withdraw-duration (always set to true at first and set a starting withdraw duration, even if its only 0 seconds!)
     ;withdraw-duration: time in seconds until this user can begin withdrawing, ex: 0 (always set a withdraw duration unless updating the users allocation after it was already set previously)
 
 
-    (defun create-stake (pool-id:string account:string amount:decimal set-withdraw-duration:bool withdraw-duration:decimal)
+    (defun create-stake (
+                        pool-id:string
+                        account:string
+                        amount:decimal
+                        set-withdraw-duration:bool
+                        withdraw-duration:decimal
+                        max-rewards:decimal
+                        )
         @doc " Creates or adds more distribution allocations to a beneficiary account, transfering the accounts current allocations before so if there are any"
         (with-capability (POOL_CREATOR_GUARD pool-id )
+        (if (= (at "has-vesting-connection" (read pools-usage pool-id)) true )
+          (let
+                  (
+                      (hasVEST true)
+                  )
+                  (migrate-vesting-allocations pool-id)
+                  (absorb-new-tokens pool-id)
+          )
+          true
+        )
             (let
                 (
                     (pool-data (read pools pool-id))
@@ -380,7 +464,8 @@
                                             (calculate-multiplier pool-id)
                                             (at "multiplier" pool-usage-data)
                                           ),
-                            "start-time": (at "block-time" (chain-data))
+                            "start-time": (at "block-time" (chain-data)),
+                            "max-rewards": max-rewards
                         })
 
                         ;Update pool usage data
@@ -450,12 +535,21 @@
         )
     )
 
-    (defun claim (pool-id:string account:string)
+    (defun claim-vest (pool-id:string account:string)
         @doc "Transfers a beneficiarys current allocation from a pool"
-        ;(with-capability (ACCOUNT_GUARD account)
         (with-default-read stakes (get-stake-id-key account pool-id)
           { "account" : 'nonulls, "balance" : 0.0 }
           { "account" := t_account, "balance" := t_balance }
+          (if (= (at "has-vesting-connection" (read pools-usage pool-id)) true )
+          (let
+                  (
+                      (hasVEST true)
+                  )
+                  ;(migrate-vesting-allocations pool-id)
+                  (absorb-new-tokens pool-id)
+          )
+          true
+        )
           (if (and (= account t_account) (> t_balance 0.0) )
             (let
                   (
@@ -473,89 +567,302 @@
                       )
                       (let
                           (
-                            (to-pay (if (>= (- available to-pay-max ) 0.0)
-                                      (if (> to-pay-max (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        to-pay-max
-                                      )
-                                      (if (> (at "balance" pool-data) (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        (at "balance" pool-data)
-                                      )
+                            (to-pay-total (if (>= (- available to-pay-max ) 0.0)
+                                      to-pay-max
+                                      available
                                     )
                             )
+                            (can-pay (- (at "max-rewards" stake) (at "rewards" stake) ))
                           )
-                          ;Enforce account
-                          (enforce (= account (at "account" stake)) "Authorization failed")
-                          ;Enforce balance
-                          (enforce (>= to-pay 0.0) "There are no allocations to claim for this account.")
-                          ;Enforce claim allocation duration
-                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) ) "This account must wait the full claim wait duration before it can claim allocations.") )
-                          ;Enforce pool withdraw duration
-                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'start-time pool-data)) (at "withdraw-duration" pool-data) ) "This pools withdraw actions are still locked under a withdraw wait duration.") )
-                          ;Enforce user withdraw duration
-                          (if (= (at "active" pool-data) false) true (enforce (> (diff-time (at "block-time" (chain-data)) (at 'start-time stake)) (at "withdraw-duration" stake) ) "This account's withdraw actions are still locked under a withdraw wait duration.") )
-
                           (let
-                                (
-                                  (payALLOCATION true)
+                              (
+                                (to-pay (if (>= (- can-pay to-pay-total ) 0.0)
+                                          to-pay-total
+                                          (- (at "max-rewards" stake) (at "rewards" stake) )
+                                          )
+
                                 )
+                              )
+                              ;Enforce account
+                              (enforce (= account (at "account" stake)) "Authorization failed")
+                              ;Enforce balance
+                              (if (>= to-pay 0.0)
+                                (let
+                                      (
+                                        (hasCLAIM true)
+                                      )
+                                      ;Enforce claim wait duration
+                                      (if (>= (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) )
+                                        (let
+                                              (
+                                                (canCLAIM true)
+                                              )
+                                              ;Enforce pool withdraw wait duration
+                                              (if (>= (diff-time (at "block-time" (chain-data)) (at 'start-time pool-data)) (at "withdraw-duration" pool-data) )
+                                                (let
+                                                      (
+                                                        (canWITHDRAW true)
+                                                      )
+                                                      ;Enforce user withdraw wait duration
+                                                      (if (>= (diff-time (at "block-time" (chain-data)) (at 'start-time stake)) (at "withdraw-duration" stake) )
+                                                        (let
+                                                              (
+                                                                (userWITHDRAW true)
+                                                              )
 
-                                ;Compose allocation transfer
-                                (if (> to-pay 0.0)
-                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (install-capability (reward-token::TRANSFER pool-id account to-pay))
-                                    (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                                              ;Compose allocation transfer
+                                                              (if (> to-pay 0.0)
+                                                                (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                                                  (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                                                  (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                                                )
+                                                              true)
+                                                              ;Transfer back the allocation amount composed above
+                                                              (if (> to-pay 0.0)
+                                                                (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
+                                                                )
+                                                              true)
+
+                                                              ;Update pool usage data
+                                                              (update pools-usage pool-id
+                                                                      {
+                                                                          "last-updated": (at "block-time" (chain-data)),
+                                                                          "paid": (+ (at "paid" pool-usage-data) to-pay) ,
+                                                                          "multiplier": (calculate-multiplier pool-id)
+                                                                      }
+                                                              )
+
+                                                              ;Update pool data
+                                                              (update pools pool-id
+                                                                {
+                                                                    "balance": (- (at "balance" pool-data) (if (> to-pay 0.0) to-pay 0.0) ),
+                                                                    "active": (if (<= (- (at "balance" pool-data) to-pay) 0.0) false (at "active" pool-data) )
+                                                                }
+                                                              )
+
+                                                              ;Update user stake data
+                                                              (update stakes stake-id
+                                                                {
+                                                                  "last-updated":  (at "block-time" (chain-data)),
+                                                                  "rewards": (+ (at "rewards" stake) (if (> to-pay 0.0) to-pay 0.0)),
+                                                                  "last-claimed":  (at "block-time" (chain-data)),
+                                                                  "multiplier": (at "multiplier" (read pools-usage pool-id))
+                                                                  }
+                                                              )
+
+                                                              ;If this account has claimed its max rewards and can no longer claim rewards, then remove its allocation and recycle what it was claiming back into the pool for distribution
+                                                              (if (or (= (- (at "max-rewards" stake) (at "rewards" stake) ) 0.0) (= (- (at "max-rewards" (read stakes stake-id)) (at "rewards" (read stakes stake-id)) ) 0.0) )
+                                                              (let
+                                                                  (
+                                                                    (userEXPIRED true)
+                                                                  )
+                                                                  (update pools pool-id
+                                                                      {
+                                                                          "end-time": (calculate-pool-end-time pool-id false true to-pay-max),
+                                                                          "stakers": (- (at "stakers" pool-data) 1.0)
+                                                                      }
+                                                                  )
+                                                                  (update pools-usage pool-id
+                                                                      {
+                                                                          "tokens-locked": (- (at "tokens-locked" pool-usage-data) (at "balance" stake) )
+                                                                      }
+                                                                  )
+                                                                  (update stakes stake-id
+                                                                      {
+                                                                          "balance": (-(at "balance" stake) (at "balance" stake) )
+                                                                      }
+                                                                  )
+                                                              )
+                                                              true)
+
+                                                              ;Return message
+                                                              (format "Awarded {} with {} {}" [account to-pay reward-token])
+                                                          )
+                                                        (format "Withdraw actions for {} are still locked under a wait-limit in pool {}" [account pool-id])
+                                                      )
+                                                  )
+                                                (format "Withdraw actions are still locked under a wait-limit in pool {}" [pool-id])
+                                              )
+                                          )
+                                        (format "{} must wait the full wait-limit in {} before claiming emissions" [account pool-id])
+                                      )
                                   )
-                                true)
-                                ;Transfer back the allocation amount composed above
-                                (if (> to-pay 0.0)
-                                  (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
-                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
-                                    (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
-                                  )
-                                true)
+                                (format "{} has no emissions to claim right now in pool {}" [account pool-id])
+                              )
                           )
-
-                          ;Update pool usage data
-                          (update pools-usage pool-id
-                                  {
-                                      "last-updated": (at "block-time" (chain-data)),
-                                      "paid": (+ (at "paid" pool-usage-data) to-pay) ,
-                                      "multiplier": (calculate-multiplier pool-id)
-                                  }
-                          )
-
-                          ;Update pool data
-                          (update pools pool-id
-                            {
-                                "balance": (- (at "balance" pool-data) to-pay),
-                                "active": (if (<= (- (at "balance" pool-data) to-pay) 0.0) false (at "active" pool-data) )
-                            }
-                          )
-
-                          ;Update user stake data
-                          (update stakes stake-id
-                            {
-                              "last-updated":  (at "block-time" (chain-data)),
-                              "rewards": (+ (at "rewards" stake) to-pay),
-                              "last-claimed":  (at "block-time" (chain-data)),
-                              "multiplier": (at "multiplier" (read pools-usage pool-id))
-                              }
-                          )
-
-                          ;Return message
-                          (format "Awarded {} with {} {}" [account to-pay reward-token])
-
-
                       )
                   )
                 (format "{} has no token emissions to claim in {}" [account pool-id]))
                 )
           (format "{} has no token emissions to claim in {}" [account pool-id]))
         )
+    )
 
-        ;)
+    (defun claim (pool-id:string account:string)
+        @doc "Transfers a beneficiarys current allocation from a pool"
+        (with-default-read stakes (get-stake-id-key account pool-id)
+          { "account" : 'nonulls, "balance" : 0.0 }
+          { "account" := t_account, "balance" := t_balance }
+          (if (= (at "has-vesting-connection" (read pools-usage pool-id)) true )
+          (let
+                  (
+                      (hasVEST true)
+                  )
+                  (migrate-vesting-allocations pool-id)
+                  (absorb-new-tokens pool-id)
+          )
+          true
+        )
+          (if (and (= account t_account) (> t_balance 0.0) )
+            (let
+                  (
+                      (stake-id (get-stake-id-key account pool-id))
+                      (pool-data (read pools pool-id))
+                      (pool-usage-data (read pools-usage pool-id))
+                  )
+                  (if (> (at "stakers" pool-data) 0.0)
+                  (let
+                      (
+                        (stake (read stakes stake-id))
+                        (reward-token:module{fungible-v2} (at "reward-token" pool-data))
+                        (to-pay-max (calculate-rewards pool-id account) )
+                        (available (at "balance" pool-data))
+                      )
+                      (let
+                          (
+                            (to-pay-total (if (>= (- available to-pay-max ) 0.0)
+                                      to-pay-max
+                                      available
+                                    )
+                            )
+                            (can-pay (- (at "max-rewards" stake) (at "rewards" stake) ))
+                          )
+                          (let
+                              (
+                                (to-pay (if (>= (- can-pay to-pay-total ) 0.0)
+                                          to-pay-total
+                                          (- (at "max-rewards" stake) (at "rewards" stake) )
+                                          )
+
+                                )
+                              )
+                              ;Enforce account
+                              (enforce (= account (at "account" stake)) "Authorization failed")
+                              ;Enforce balance
+                              (if (>= to-pay 0.0)
+                                (let
+                                      (
+                                        (hasCLAIM true)
+                                      )
+                                      ;Enforce claim wait duration
+                                      (if (>= (diff-time (at "block-time" (chain-data)) (at 'last-claimed stake)) (at "claim-wait-seconds" pool-data) )
+                                        (let
+                                              (
+                                                (canCLAIM true)
+                                              )
+                                              ;Enforce pool withdraw wait duration
+                                              (if (>= (diff-time (at "block-time" (chain-data)) (at 'start-time pool-data)) (at "withdraw-duration" pool-data) )
+                                                (let
+                                                      (
+                                                        (canWITHDRAW true)
+                                                      )
+                                                      ;Enforce user withdraw wait duration
+                                                      (if (>= (diff-time (at "block-time" (chain-data)) (at 'start-time stake)) (at "withdraw-duration" stake) )
+                                                        (let
+                                                              (
+                                                                (userWITHDRAW true)
+                                                              )
+
+                                                              ;Compose allocation transfer
+                                                              (if (> to-pay 0.0)
+                                                                (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                                                  (install-capability (reward-token::TRANSFER pool-id account to-pay))
+                                                                  (install-capability (reward-token::TRANSFER pool-id account (at "balance" pool-data)))
+                                                                )
+                                                              true)
+                                                              ;Transfer back the allocation amount composed above
+                                                              (if (> to-pay 0.0)
+                                                                (if (>= (- (at "balance" pool-data) to-pay ) 0.0)
+                                                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account to-pay)  )
+                                                                  (with-capability (PRIVATE_RESERVE pool-id (get-token-key reward-token)) (reward-token::transfer pool-id account (at "balance" pool-data) )  )
+                                                                )
+                                                              true)
+
+                                                              ;Update pool usage data
+                                                              (update pools-usage pool-id
+                                                                      {
+                                                                          "last-updated": (at "block-time" (chain-data)),
+                                                                          "paid": (+ (at "paid" pool-usage-data) to-pay) ,
+                                                                          "multiplier": (calculate-multiplier pool-id)
+                                                                      }
+                                                              )
+
+                                                              ;Update pool data
+                                                              (update pools pool-id
+                                                                {
+                                                                    "balance": (- (at "balance" pool-data) (if (> to-pay 0.0) to-pay 0.0) ),
+                                                                    "active": (if (<= (- (at "balance" pool-data) to-pay) 0.0) false (at "active" pool-data) )
+                                                                }
+                                                              )
+
+                                                              ;Update user stake data
+                                                              (update stakes stake-id
+                                                                {
+                                                                  "last-updated":  (at "block-time" (chain-data)),
+                                                                  "rewards": (+ (at "rewards" stake) (if (> to-pay 0.0) to-pay 0.0)),
+                                                                  "last-claimed":  (at "block-time" (chain-data)),
+                                                                  "multiplier": (at "multiplier" (read pools-usage pool-id))
+                                                                  }
+                                                              )
+
+                                                              ;If this account has claimed its max rewards and can no longer claim rewards, then remove its allocation and recycle what it was claiming back into the pool for distribution
+                                                              (if (or (= (- (at "max-rewards" stake) (at "rewards" stake) ) 0.0) (= (- (at "max-rewards" (read stakes stake-id)) (at "rewards" (read stakes stake-id)) ) 0.0) )
+                                                              (let
+                                                                  (
+                                                                    (userEXPIRED true)
+                                                                  )
+                                                                  (update pools pool-id
+                                                                      {
+                                                                          "end-time": (calculate-pool-end-time pool-id false true to-pay-max),
+                                                                          "stakers": (- (at "stakers" pool-data) 1.0)
+                                                                      }
+                                                                  )
+                                                                  (update pools-usage pool-id
+                                                                      {
+                                                                          "tokens-locked": (- (at "tokens-locked" pool-usage-data) (at "balance" stake) )
+                                                                      }
+                                                                  )
+                                                                  (update stakes stake-id
+                                                                      {
+                                                                          "balance": (-(at "balance" stake) (at "balance" stake) )
+                                                                      }
+                                                                  )
+                                                              )
+                                                              true)
+
+                                                              ;Return message
+                                                              (format "Awarded {} with {} {}" [account to-pay reward-token])
+                                                          )
+                                                        (format "Withdraw actions for {} are still locked under a wait-limit in pool {}" [account pool-id])
+                                                      )
+                                                  )
+                                                (format "Withdraw actions are still locked under a wait-limit in pool {}" [pool-id])
+                                              )
+                                          )
+                                        (format "{} must wait the full wait-limit in {} before claiming emissions" [account pool-id])
+                                      )
+                                  )
+                                (format "{} has no emissions to claim right now in pool {}" [account pool-id])
+                              )
+                          )
+                      )
+                  )
+                (format "{} has no token emissions to claim in {}" [account pool-id]))
+                )
+          (format "{} has no token emissions to claim in {}" [account pool-id]))
+        )
     )
 
     (defun remove-account (pool-id:string account:string pay-out:bool)
@@ -582,14 +889,8 @@
                       (let
                           (
                             (to-pay (if (>= (- available to-pay-max ) 0.0)
-                                      (if (> to-pay-max (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        to-pay-max
-                                      )
-                                      (if (> (at "balance" pool-data) (at "max-reward-per-claim" pool-data))
-                                        (at "max-reward-per-claim" pool-data)
-                                        (at "balance" pool-data)
-                                      )
+                                      to-pay-max
+                                      available
                                     )
                             )
                             (to-pay-stake (at "balance" stake))
