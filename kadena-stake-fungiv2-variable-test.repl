@@ -200,14 +200,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool"
     "Test Pool"
-    10.0
     50.0
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -771,14 +768,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool2"
     "Test Pool2"
-    10.0
     50.0
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -849,14 +843,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool3"
     "Test Pool3"
-    10.0
     50.0
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -977,14 +968,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool4"
     "Test Pool4"
-    10.0
     50.0
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1130,14 +1118,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool5"
     "Test Pool5"
-    10.0
     50.0
     test.anedak
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1277,14 +1262,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool6"
     "Test Pool6"
-    10.0
     50.0
     coin
     test.anedak
     "k:stuart"
-    50.0
     86400.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1448,14 +1430,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool7"
     "Test Pool7"
-    10.0
     50.0
     coin
     test.anedak
     "k:stuart"
-    50.0
     172800.0
-    50.0
     86400.0
     10.0
     604800.0
@@ -1563,15 +1542,17 @@
 ;//////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ;//////////////////////////////////////////////////////////////////////////////////
-;TESTING VESTING POOL + STAKING POOL
+;TESTING VESTING POOL + VESTING POOL + STAKING POOL
 ;TEST POOL 8
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;HERE WE TEST OUR ABILITY TO ABSORB NEW TOKENS SENT TO THE POOL BY VESTING POOLS
 ;A STAKING POOL IS CREATED THAT EMITS 10 TOKENS PER DAY
-;A VESTING POOL IS CREATED THAT EMITS 10 TOKENS PER DAY TO THE STAKING POOLS ACCOUNT
+;A VESTING POOL1 IS CREATED THAT EMITS 10 TOKENS PER DAY TO THE STAKING POOLS ACCOUNT
+;A VESTING POOL2 IS CREATED THAT EMITS 10 TOKENS TO VESTING POOL 1
 ;THE STAKING POOL IS THEN CONNECTED TO THE VESTING POOL
-;ONCE CONNECTED THE STAKING POOL WILL AUTO-MIGRATE EMISSIONS FROM VESTING POOL
+;THE VESTING POOL1 IS THEN CONNECTED TO VESTING POOL2
+;ONCE CONNECTED THE STAKING POOL WILL AUTO-MIGRATE EMISSIONS FROM VESTING POOL1, TO VESTING POOL2, TO STAKING POOL
 
 ;Test create STAKING POOL 'test-pool7' with k:stuart for 50 KDA
 (begin-tx)
@@ -1582,14 +1563,11 @@
 (test.kadena-stake-fungiv2.create-pool
     "test-pool8"
     "Test Pool8"
-    10.0
     50.0
     coin
     coin
     "k:stuart"
-    50.0
     0.0
-    50.0
     86400.0
     10.0
     86400.0
@@ -1618,25 +1596,68 @@
     50.0
     86400.0
     10.0
+    0.0
 )
 (coin.get-balance "k:stuart")
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
 (commit-tx)
 
+;Test create pool VESTING POOL 'test-pool7' with k:stuart for 50 K      DA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-poolMAIN" 200.0))
+(env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "test-poolMAIN"
+    "Test PoolMAIN"
+    200.0
+    coin
+    "k:stuart"
+    200.0
+    0.0
+    200.0
+    86400.0
+    10.0
+    0.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+
+
 ;Pool creator adds staking pool account to vesting pool
 (begin-tx)
 (use test.kadena-stake-fungiv2-vesting)
 (test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-poolV"))
-(test.kadena-stake-fungiv2-vesting.create-stake "test-poolV" "test-pool8" 100.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-poolV" "test-pool8" 100.0 true 0.0 50.0)
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
 (commit-tx)
 ;The vesting pool will now emit its allocations to the staking pool
+
+;Pool creator adds vesting pool 8 account to vesting pool V pool
+(begin-tx)
+(use test.kadena-stake-fungiv2-vesting)
+(test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-poolMAIN"))
+(test.kadena-stake-fungiv2-vesting.create-stake "test-poolMAIN" "test-poolV" 100.0 true 0.0 50.0)
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolMAIN")
+(commit-tx)
+;The vesting pool V will now emit its allocations to the vesting pool 8
+
+;Pool creator connects the vesting pool 8 to the vesting pool V
+(begin-tx)
+(test.kadena-stake-fungiv2-vesting.connect-vesting-pool "test-poolV" "test-poolMAIN" true)
+(commit-tx)
+;The vesting pool V will now claim allocations from the vesting pool MAIN automatically
 
 ;Pool creator connects the staking pool to the vesting pool
 (begin-tx)
 (test.kadena-stake-fungiv2.connect-vesting-pool "test-pool8" "test-poolV" true)
 (commit-tx)
 ;The staking pool will now claim allocations from the vesting pool
+
+;Now vesting pool main flows to vesting pool V automatically
+;And vesting pool V flows to staking pool 8 automatically
 
 ;Emily stakes 100 KDA
 (begin-tx)
@@ -1658,12 +1679,14 @@
 )
 ;
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolMAIN")
+(test.kadena-stake-fungiv2.get-pool-info "test-pool8")
 
 
 (expect
     "Vesting pool balance decreases due to migration of funds to staking pool"
     true
-    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 40.0)
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 50.0)
 )
 (commit-tx)
 ;Emily stakes 100KDA in the staking pool that is connected to a vesting pool
@@ -1673,11 +1696,17 @@
 ;Emily claims rewards 1 day after staking
 (begin-tx)
 (env-chain-data { "block-time" : (time "2090-04-03T00:00:01Z") })
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolMAIN")
 (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
+
 (expect
   "Rewarded k:emily with 10.000000000000 coin for 100.00% of pool and unstaked 0.0 coin"
   "Rewarded k:emily with 10.000000000000 coin for 100.00% of pool and unstaked 0.0 coin"
   (test.kadena-stake-fungiv2.claim "test-pool8" "k:emily" false))
+
+(   test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolMAIN")
 (test.kadena-stake-fungiv2.get-pool-info "test-pool8")
 (commit-tx)
 ;Emily claims 10 KDA as rewards - Correct
