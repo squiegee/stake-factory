@@ -4,7 +4,7 @@
 
 ;; Enable the table gas model and load the coin contract + create coin contract tables
 (env-gasmodel "table")
-(env-gaslimit 150000)
+(env-gaslimit 200000)
 (begin-tx)
 (env-gas 0) (env-gaslog)
 (load "fungible-v2.pact")
@@ -158,6 +158,20 @@
 (define-namespace 'test (sig-keyset) (sig-keyset))
 (env-data { 'ns: 'test })
 (env-gas 0) (env-gaslog)
+(load "kadena-stake-fungiv2-vesting-negative.pact")
+(env-gaslog)
+(create-table test.kadena-stake-fungiv2-vesting-negative.pools)
+(create-table test.kadena-stake-fungiv2-vesting-negative.pools-usage)
+(create-table test.kadena-stake-fungiv2-vesting-negative.stakes)
+(create-table test.kadena-stake-fungiv2-vesting-negative.pool-user-stats)
+(commit-tx)
+
+
+;Load Contract + Create Tables
+(begin-tx)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test })
+(env-gas 0) (env-gaslog)
 (load "kadena-stake-fungiv2-vesting.pact")
 (env-gaslog)
 (create-table test.kadena-stake-fungiv2-vesting.pools)
@@ -166,6 +180,13 @@
 (create-table test.kadena-stake-fungiv2-vesting.pool-user-stats)
 (commit-tx)
 
+(begin-tx)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test, 'upgrade: true })
+(env-gas 0) (env-gaslog)
+(load "kadena-stake-fungiv2-vesting-negative-2.pact")
+(env-gaslog)
+(commit-tx)
 
 ;//////////////////////////////////////////////////////////////////////////////////////////////////////////
 ;TEST POOL TEST
@@ -211,7 +232,7 @@
 
 (test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
 (test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-pool"))
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 true 0.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 true 0.0 50.0)
 
 (coin.get-balance "k:emily")
 (coin.get-balance "test-pool")
@@ -316,7 +337,7 @@
 (coin.get-balance "k:doug")
 (env-chain-data { "block-time" : (time "2023-04-03T00:00:00Z") })
 (test-capability (coin.TRANSFER "k:doug" "test-pool" 100.0))
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:doug" 100.0 true 0.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:doug" 100.0 true 0.0 50.0)
 (coin.get-balance "k:doug")
 (coin.get-balance "test-pool")
 (test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool" "k:doug")
@@ -392,7 +413,7 @@
 (coin.get-balance "k:kitty")
 (env-chain-data { "block-time" : (time "2023-04-04T00:00:00Z") })
 (test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0 50.0)
 (coin.get-balance "k:kitty")
 (coin.get-balance "test-pool")
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool")
@@ -626,7 +647,7 @@
 (expect
   "The vesting pool test-pool is deactivated."
   "The vesting pool test-pool is deactivated."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 false 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 false 0.0 50.0))
 ;Kitty cannot be allocated tokens rewards because the pool is deactivated and empty - correct
 
 ;Test claim allocations from a pool that a user has 0 rewards due
@@ -665,7 +686,7 @@
 (expect
   "The vesting pool test-pool is deactivated."
   "The vesting pool test-pool is deactivated."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0 50.0))
 (commit-tx)
 ;Correct
 
@@ -676,7 +697,7 @@
 (expect
   "The vesting pool test-pool is deactivated."
   "The vesting pool test-pool is deactivated."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 false 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 false 0.0 50.0))
 (commit-tx)
 ;Correct
 
@@ -689,8 +710,8 @@
 (env-chain-data { "block-time" : (time "2023-04-26T00:00:00Z") })
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool")
 (expect
-  "Awarded k:kitty with 0.000000000000 coin"
-  "Awarded k:kitty with 0.000000000000 coin"
+  "Awarded k:kitty with 0.0 coin"
+  "Awarded k:kitty with 0.0 coin"
   (test.kadena-stake-fungiv2-vesting.claim "test-pool" "k:kitty"))
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool")
 (commit-tx)
@@ -716,7 +737,7 @@
 (expect
   "The vesting pool test-pool is deactivated."
   "The vesting pool test-pool is deactivated."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:emily" 100.0 true 0.0 50.0))
 (commit-tx)
 ;Correct - the pool has nothing to give away and refuses new accounts
 
@@ -727,7 +748,7 @@
 (expect
   "The vesting pool test-pool is deactivated."
   "The vesting pool test-pool is deactivated."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool" "k:kitty" 100.0 true 0.0 50.0))
 (commit-tx)
 ;Correct - no new accounts can be created because the pool is deactivated
 
@@ -736,8 +757,8 @@
 (env-chain-data { "block-time" : (time "2023-05-15T00:00:04Z") })
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool")
 (expect
-  "Awarded k:kitty with 0.000000000000 coin"
-  "Awarded k:kitty with 0.000000000000 coin"
+  "Awarded k:kitty with 0.0 coin"
+  "Awarded k:kitty with 0.0 coin"
   (test.kadena-stake-fungiv2-vesting.claim "test-pool" "k:kitty"))
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool")
 (test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool" "k:kitty")
@@ -792,7 +813,7 @@
 (expect
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool2" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool2" "k:emily" 100.0 true 0.0 50.0))
 (coin.get-balance "k:emily")
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool2")
 (commit-tx)
@@ -807,7 +828,7 @@
 (expect
   "Pool test-pool2 is exhausted and can not distribute allocations any further."
   "Pool test-pool2 is exhausted and can not distribute allocations any further."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool2" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool2" "k:kitty" 100.0 true 0.0 50.0))
 (commit-tx)
 ;Correct - The beneficiary kitty cannot be added because there are no more rewards to distribute after the end-time
 
@@ -875,7 +896,7 @@
 (expect
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool3" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool3" "k:emily" 100.0 true 0.0 50.0))
 
 (coin.get-balance "k:emily")
 (commit-tx)
@@ -945,7 +966,7 @@
 (expect
   "Pool test-pool3 is exhausted and can not distribute allocations any further."
   "Pool test-pool3 is exhausted and can not distribute allocations any further."
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool3" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool3" "k:kitty" 100.0 true 0.0 50.0))
 
 (coin.get-balance "k:kitty")
 (commit-tx)
@@ -1000,7 +1021,7 @@
 (expect
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:emily" 100.0 true 0.0 50.0))
 
 (coin.get-balance "k:emily")
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool4")
@@ -1037,7 +1058,7 @@
 (expect
   "Allocated 100.0% of emissions to k:kitty for 10.0 coin every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:kitty for 10.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:kitty" 100.0 true 0.0 50.0))
 
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool4")
 
@@ -1056,7 +1077,7 @@
 (expect
   "Allocated 50.0% of emissions to k:emily for 5.0 coin every 86400.0 seconds"
   "Allocated 50.0% of emissions to k:emily for 5.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool4" "k:emily" 100.0 true 0.0 50.0))
 
 (coin.get-balance "k:emily")
 
@@ -1226,7 +1247,7 @@
 (expect
   "Allocated 100.0% of emissions to k:emily for 10.0 test.anedak every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:emily for 10.0 test.anedak every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool5" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool5" "k:emily" 100.0 true 0.0 50.0))
 
 ;Emilys ADK balance reamins unchanged - Correct (This is a ADK rewards pool)
 (expect
@@ -1248,7 +1269,7 @@
 (expect
   "Allocated 75.0% of emissions to k:kitty for 7.5 test.anedak every 86400.0 seconds"
   "Allocated 75.0% of emissions to k:kitty for 7.5 test.anedak every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool5" "k:kitty" 300.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool5" "k:kitty" 300.0 true 0.0 50.0))
 (commit-tx)
 ;Kitty now earns 7.5 tokens out of 10 tokens per day
 
@@ -1392,7 +1413,7 @@
 (expect
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
   "Allocated 100.0% of emissions to k:emily for 10.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool6" "k:emily" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool6" "k:emily" 100.0 true 0.0 50.0))
 
 ;Coin does not get 'staked' from emily like other pools
 (expect
@@ -1412,7 +1433,7 @@
 (expect
   "Allocated 50.0% of emissions to k:kitty for 5.0 coin every 86400.0 seconds"
   "Allocated 50.0% of emissions to k:kitty for 5.0 coin every 86400.0 seconds"
-  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool6" "k:kitty" 100.0 true 0.0))
+  (test.kadena-stake-fungiv2-vesting.create-stake "test-pool6" "k:kitty" 100.0 true 0.0 50.0))
 (commit-tx)
 ;Kitty now earns 5 tokens per day and emily 5 tokens per day
 
@@ -1535,9 +1556,9 @@
 ;Emilys beneficiary account is created with 50% weight of the reward
 (begin-tx)
 (env-chain-data { "block-time" : (time "2080-05-01T00:00:00Z") })
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:kitty" 25.0 true 0.0)
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:doug" 25.0 true 0.0)
-(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:emily" 50.0 true 0.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:kitty" 25.0 true 0.0 10.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:doug" 25.0 true 0.0 50.0)
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool7" "k:emily" 50.0 true 0.0 50.0)
 (commit-tx)
 ;We create 3 accounts in this pool splitting the 10KDA reward a day 25%/25%/50%
 
@@ -1586,6 +1607,7 @@
 ;Correct - emily gets nothing
 
 ;Kitty withdraws his allocations 4 days after staking for 2.5 tokens at 25% of pool for 4 days
+;Kitty has now claimed his max rewards for his account
 (begin-tx)
 (env-chain-data { "block-time" : (time "2080-05-05T00:00:03Z") })
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
@@ -1597,18 +1619,35 @@
 
 
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool7" "k:kitty")
 (commit-tx)
 ;Kitty gets proper rewards, the pool is exhausted, and deactivates - correct
 
-;Kitty claims again a day later, with emily gone, kittys weight is now 50% of the pool and he earns 5 tokens per day
+;Kitty claims again a day later but he has already hit his max claims, the pool removes his allocation and recycles the funds he was due and extends its end-time
 (begin-tx)
-(env-chain-data { "block-time" : (time "2080-05-06T00:00:04Z") })
+(env-chain-data { "block-time" : (time "2080-05-08T00:00:04Z") })
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
 
 (expect
-  "Awarded k:kitty with 5.000000000000 coin"
-  "Awarded k:kitty with 5.000000000000 coin"
+  "k:kitty has no token emissions to claim in test-pool7"
+  "k:kitty has no token emissions to claim in test-pool7"
   (test.kadena-stake-fungiv2-vesting.claim "test-pool7" "k:kitty"))
+
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
+(commit-tx)
+;Kittys account is also removed as a staker
+
+;With kittys allocation recycled, doug can now earn his allocation
+;Doug now also earns 100% of the pool a day
+(begin-tx)
+(env-chain-data { "block-time" : (time "2080-05-10T00:00:04Z") })
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
+
+(expect
+  "Awarded k:doug with 37.500000000000 coin"
+  "Awarded k:doug with 37.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool7" "k:doug"))
 
 
 (test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool7")
@@ -1618,4 +1657,138 @@
 ;BENEFICIARYS EARN SAME AMOUNT UP UNTIL ANOTHER BENEFICARY IS REMOVED
 ;OLD BENEFICIARYS TAKE UP THE WEIGHT OF THE BENEFICIARY WHICH WAS REMOVED EVENLY
 
-;//////////////////////////////////////////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////////////////
+;VESTING POOLS CONNECTED TO VESTING POOLS
+;TEST POOL 8
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;Here we make an example of a team creating a vesting pool account which dumps tokens into another vesting pool account
+;Vesting pools can only be connected to 1 other vesting pool and they will auto migrate funds down from pool A to pool B
+
+;Test create VESTING POOL 'test-pool8' with k:stuart for 50 KDA
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-pool8" 50.0))
+(env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "test-pool8"
+    "Test Pool8"
+    50.0
+    coin
+    "k:stuart"
+    50.0
+    0.0
+    50.0
+    86400.0
+    10.0
+    0.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(commit-tx)
+;The pool will distribute 10 rewards every 86400.0 seconds (1 day)
+;pool multiplier: 1.0
+;This is the vesting pool that will pay the team, its made first
+
+;Test create pool VESTING POOL 'test-poolV' with k:stuart
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-poolV" 200.0))
+(env-chain-data { "block-time" : (time "2090-04-01T00:00:00Z") })
+
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "test-poolV"
+    "Test PoolV"
+    200.0
+    coin
+    "k:stuart"
+    200.0
+    0.0
+    200.0
+    86400.0
+    10.0
+    0.0
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+;This is the main vesting pool for the entire project which will pay the team pool
+
+;Pool creator adds vesting pool 8 account to vesting pool V pool
+(begin-tx)
+(use test.kadena-stake-fungiv2-vesting)
+(test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-poolV"))
+(test.kadena-stake-fungiv2-vesting.create-stake "test-poolV" "test-pool8" 100.0 true 0.0 50.0)
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+;The vesting pool V will now emit its allocations to the vesting pool 8
+
+;Pool creator adds k:emily to vesting pool 8
+(begin-tx)
+(use test.kadena-stake-fungiv2-vesting)
+(test-capability (test.kadena-stake-fungiv2-vesting.POOL_CREATOR_GUARD "test-pool8"))
+(test.kadena-stake-fungiv2-vesting.create-stake "test-pool8" "k:emily" 100.0 true 0.0 50.0)
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(commit-tx)
+;Emily has full weight in vesting pool 8, and should earn 100% rewards at 10 KDA a day
+
+;Pool creator connects the vesting pool 8 to the vesting pool V
+(begin-tx)
+(test.kadena-stake-fungiv2-vesting.connect-vesting-pool "test-pool8" "test-poolV" true)
+(commit-tx)
+;The vesting pool 8 will now claim allocations from the vesting pool V automatically
+
+;Emily claims rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2090-04-02T00:00:01Z") })
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+
+(expect
+    "Vesting pool V balance"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 200.0))
+
+(expect
+  "Awarded k:emily with 10.000000000000 coin"
+  "Awarded k:emily with 10.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool8" "k:emily"))
+
+(expect
+    "Vesting pool V balance decreases due to migration of funds to Vesting pool 8"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 190.0))
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+;Correct, emily is due 10 rewards today
+;Correct, test pool V also migrates its funds down to test pool 8 on a CLAIM
+;Correct test-pool 8 has paid 10 tokens, but still has a balance of 50 (this is due to the migration of tokens from pool A to pool B)
+
+;Emily claims rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "2090-04-03T00:00:02Z") })
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+
+(expect
+    "Vesting pool V balance decreases due to migration of funds to Vesting pool 8"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 190.0))
+
+(expect
+  "Awarded k:emily with 10.000000000000 coin"
+  "Awarded k:emily with 10.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool8" "k:emily"))
+
+(expect
+    "Vesting pool V balance decreases due to migration of funds to Vesting pool 8"
+    true
+    (= (at "balance" (test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")) 180.0))
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool8")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-poolV")
+(commit-tx)
+;Correct, emily is due 10 rewards today
+;Correct, test pool V also migrates its funds down to test pool 8 on a CLAIM
