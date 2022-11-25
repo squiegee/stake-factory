@@ -1051,13 +1051,7 @@
                                   )
                                 true)
                             )
-
-                          ;If not paying the deleted account (recycle the funds)
-                            ; (update pools pool-id
-                            ;       {
-                            ;           "end-time": (calculate-pool-end-time pool-id false false (* to-pay -1.0))
-                            ;       }
-                            ; )
+                            ;If not paying
                             true
                           )
 
