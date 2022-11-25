@@ -32,7 +32,7 @@
 
     (defcap ACCOUNT_GUARD(account:string)
         @doc "Verifies account meets format and belongs to caller"
-        (enforce (= "k:" (take 2 account)) "For security only support k accounts")
+        ;(enforce (is-principal account) "k accounts only")
         (enforce-guard
             (at "guard" (coin.details account))
         )
