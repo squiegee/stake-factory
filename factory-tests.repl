@@ -1,0 +1,927 @@
+;;///////////////////////////////////////
+;;SETUP ACCOUNTS + COIN + STEAK TOKEN
+;;///////////////////////////////////////
+
+(begin-tx)
+(env-exec-config ['DisableInlineMemCheck])
+(env-gasmodel "table")
+(env-gaslimit 1500000)
+(begin-tx)
+(load "fungible-v2.pact")
+(load "fungible-xchain-v1.pact")
+(load "coin.pact")
+(env-gaslog)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test })
+(env-gas 0) (env-gaslog)
+(load "stake.pact")
+(env-gaslog)
+(create-table token-table)
+(env-data { "k:emily" : ["emily"], "admin-kadena-stake": ["k:admin-kadena-stake"], "k:admin-factory-treasury": ["admin-factory-treasury"], "admin-factory-treasury": ["k:admin-factory-treasury"], "k:stuart": ["stuart"], "k:doug": ["doug"], "k:kitty": ["kitty"], "prev-block-hash": "lPqiP54vy_E3rAkvgQVme2FreVXpVhOV3dIJYENZ2Zk" })
+(env-keys ["operate", "emily", "stuart", "doug", "kitty", "swap-user", "swap-admin", "k:admin-kadena-stake", "k:adminfactory", "k:admin-factory-treasury", "admin-factory-treasury"])
+(define-keyset "test.emily" (read-keyset "k:emily"))
+(define-keyset "test.doug" (read-keyset "k:doug"))
+(define-keyset "test.admin-kadena-stake" (read-keyset "admin-kadena-stake"))
+(define-keyset "test.admin-factory-treasury" (read-keyset "admin-factory-treasury"))
+(define-keyset "test.stuart" (read-keyset "k:stuart"))
+(define-keyset "test.kitty" (read-keyset "k:kitty"))
+(load "fungible-v2.pact")
+(load "coin.pact")
+(env-gaslog)
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(test.stake-token.initialize)
+(test.stake-token.move-premine "k:emily"(read-keyset "k:emily") 10000.0  )
+(test.stake-token.get-balance "k:emily")
+(use coin)
+(create-account "k:emily" (read-keyset "k:emily"))
+(create-account 'admin-kadena-stake (read-keyset 'admin-kadena-stake))
+(create-account "k:stuart" (read-keyset "k:stuart"))
+(create-account "k:doug" (read-keyset "k:doug"))
+(create-account "k:kitty" (read-keyset "k:kitty"))
+(coin.get-balance "k:emily")
+(commit-tx)
+
+;///////////////////////////////
+;Credit test STEAK token
+;////////////////////////////////
+(begin-tx)
+(test-capability (test.stake-token.TRANSFER "k:emily" "k:kitty" 1000.0))
+(test.stake-token.transfer-create "k:emily" "k:kitty" (read-keyset "k:kitty") 1000.0)
+
+(test-capability (test.stake-token.TRANSFER "k:emily" "k:admin-factory-treasury" 1000.0))
+(test.stake-token.transfer-create "k:emily" "k:admin-factory-treasury" (read-keyset "k:admin-factory-treasury") 1000.0)
+
+(test-capability (test.stake-token.TRANSFER "k:emily" "k:doug" 1000.0))
+(test.stake-token.transfer-create "k:emily" "k:doug" (read-keyset "k:doug") 1000.0)
+
+(test-capability (test.stake-token.TRANSFER "k:emily" "k:stuart" 1000.0))
+(test.stake-token.transfer-create "k:emily" "k:stuart" (read-keyset "k:stuart") 1000.0)
+(commit-tx)
+
+;///////////////////////////////
+;Credit test accounts test KDA
+;////////////////////////////////
+(begin-tx)
+(use coin)
+(test-capability (DEBIT "k:emily"))
+;; credit tests
+(test-capability (CREDIT "k:emily"))
+(credit "k:emily" (read-keyset "k:emily") 1000.0)
+
+(test-capability (CREDIT "k:kitty"))
+(credit "k:kitty" (read-keyset "k:kitty") 1000.0)
+
+(test-capability (CREDIT "k:doug"))
+(credit "k:doug" (read-keyset "k:doug") 1000.0)
+(expect
+  "account balance reflects credit"
+  1000.0
+  (get-balance "k:emily"))
+
+(test-capability (CREDIT "admin-kadena-stake"))
+(credit 'admin-kadena-stake (read-keyset 'admin-kadena-stake) 1000.0)
+(expect
+  "account balance reflects credit"
+  1000.0
+  (get-balance 'admin-kadena-stake))
+
+(test-capability (CREDIT "k:stuart"))
+(credit "k:stuart" (read-keyset "k:stuart") 1000.0)
+(expect
+  "account balance reflects credit"
+  1000.0
+  (get-balance "k:stuart"))
+(commit-tx)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;////////////////////////////
+;;STAKE POOL CONTRACT & VESTING POOL CONTRACT
+;;;;;;;;;;;;;;;;;;;;;;;;;;//////////////////////////
+
+;Vesting pool contract
+(begin-tx)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test })
+(env-gas 0) (env-gaslog)
+(load "kadena-stake-fungiv2-vesting.pact")
+(env-gaslog)
+(create-table test.kadena-stake-fungiv2-vesting.pools)
+(create-table test.kadena-stake-fungiv2-vesting.pools-usage)
+(create-table test.kadena-stake-fungiv2-vesting.stakes)
+(create-table test.kadena-stake-fungiv2-vesting.pool-user-stats)
+(create-table test.kadena-stake-fungiv2-vesting.pool-accounts)
+(commit-tx)
+
+;Staking pool contract
+(begin-tx)
+(define-namespace 'test (sig-keyset) (sig-keyset))
+(env-data { 'ns: 'test })
+(env-gas 0) (env-gaslog)
+(load "kadena-stake-fungiv2.pact")
+(env-gaslog)
+(create-table test.factory-stake-fungiv2.pools)
+(create-table test.factory-stake-fungiv2.pools-usage)
+(create-table test.factory-stake-fungiv2.stakes)
+(create-table test.factory-stake-fungiv2.pool-user-stats)
+(commit-tx)
+
+;////////////////////
+;LETS TEST STAKEFACTORY
+;
+;Here we run a series of tests with both the stake factory staking pool contract, and stake factory vesting pool contract, and stake factory STEAK token contract
+;First we set up a staking pool
+;Then we set up a vesting pool + staking pool
+;Then we do more vesting pool tests
+;
+;/////////////////////
+
+;////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+;POOL TEST 1
+;TEST GENERAL FUNCTIONALITY OF STAKING POOLS
+;Staking pools distribute tokens amongst stakers in the pool depending on their share of the pool
+;Tokens are allocated proportionally on a custom basis defined by the pool creator
+;Stakers are allocated tokens and must claim them from the pool
+;Staking pools cannot be edited after they are created and run until they distribute all the tokens the pool creator deposited in the pool
+;This test is a general test that will distribute 10 tokens per day amongst 3 stakers
+;We test to make sure balances are correct and claims and withdraws
+;////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+;Test create pool 'test-pool' with k:emily for 200 KDA
+(begin-tx)
+
+(coin.get-balance "k:emily")
+(test-capability (coin.TRANSFER "k:emily" "test-pool" 200.0))
+(env-chain-data { "block-time" : (time "2021-04-28T00:00:00Z") })
+(test.factory-stake-fungiv2.create-pool
+    "test-pool"
+    "Test Pool"
+    200.0
+    coin
+    coin
+    "k:emily"
+    0.0
+    86400.0
+    10.0
+    0.0
+)
+(coin.get-balance "k:emily")
+(commit-tx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with k:doug, 1 ms later
+(begin-tx)
+(coin.get-balance "k:doug")
+(env-chain-data { "block-time" : (time "2022-04-28T00:00:02Z") })
+(test-capability (coin.TRANSFER "k:doug" "test-pool" 100.0))
+(test.factory-stake-fungiv2.create-stake
+    "test-pool"
+    "k:doug"
+    100.0
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-all-user-pools "k:doug")
+(commit-tx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test claim rewards function a milisecond later after stake deposited with k:doug
+(begin-tx)
+(use test.factory-stake-fungiv2)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(env-chain-data { "block-time" : (time "2022-04-28T00:00:03Z") })
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(expect
+    "account balance reflects credit"
+    900.0
+    (coin.get-balance "k:doug")
+)
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:doug" false)
+
+(expect
+    "account balance reflects credit"
+    900.0
+    (coin.get-balance "k:doug")
+)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(test.factory-stake-fungiv2.get-all-user-pools "k:doug")
+(commit-tx)
+;Doug got paid 0 since this pool releases tokens every 86400.0 seconds
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with k:stuart, 2 ms after test-pool is created
+(begin-tx)
+(env-chain-data { "block-time" : (time "2022-04-28T00:00:03Z") })
+(test-capability (coin.TRANSFER "k:stuart" "test-pool" 100.0))
+(test.factory-stake-fungiv2.create-stake
+    "test-pool"
+    "k:stuart"
+    100.0
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+;stuart stakes 100kda in the test-pool
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with k:kitty, 2 ms after test-pool is created
+(begin-tx)
+(env-chain-data { "block-time" : (time "2022-04-28T00:00:04Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(test.factory-stake-fungiv2.create-stake
+    "test-pool"
+    "k:kitty"
+    100.0
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(test.factory-stake-fungiv2.get-all-user-pools "k:stuart")
+(commit-tx)
+;kitty also stakes 100kda in test-pool
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with pool owner EXPECT FAILURE - PASSES
+(begin-tx)
+(env-chain-data { "block-time" : (time "2023-04-28T00:00:11Z") })
+(test-capability (coin.TRANSFER "k:emily" "test-pool" 100.0))
+(expect-failure
+ "Pool owners may not stake their own pools."
+ "Pool owners may not stake their own pools."
+(test.factory-stake-fungiv2.create-stake "test-pool" "k:emily" 100.0))
+(commit-tx)
+;Emily attempts to stake in her own pool but fails due to factory rules
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test claim rewards function a day later with k:doug
+(begin-tx)
+(use test.factory-stake-fungiv2)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:04Z") })
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:doug" false)
+(expect
+    "account balance reflects credit"
+    903.333333333333
+    (coin.get-balance "k:doug")
+)
+
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+;doug claims his 3.33 kda reward
+;there are 3 stakers in the pool splitting 10kda per day so each staker gets 3.33
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test claim rewards function a day later with k:stuart
+(begin-tx)
+(use test.factory-stake-fungiv2)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:stuart")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:04Z") })
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:stuart" false)
+
+(expect
+    "account balance reflects credit"
+    903.333333333333
+    (coin.get-balance "k:stuart")
+)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:stuart")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+;stuart claims his reward of 3.33 kda
+;pool has rewarded doug 3.33 kda, rewarded stuart 3.33 kda, and owes kitty 3.33 kda
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with k:kitty while he is still owed 10kda
+(begin-tx)
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:12Z") })
+(test-capability (coin.TRANSFER "k:kitty" "test-pool" 100.0))
+(test.factory-stake-fungiv2.create-stake
+    "test-pool"
+    "k:kitty"
+    100.0
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(commit-tx)
+;Kitty received his 3.33kda reward and staked 100kda after, he now has 200kda staked in test-pool
+;Pools auto-withdraw pending rewards when someone claims stakes more tokens
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test claim rewards function 1 ms later with k:kitty
+(begin-tx)
+(use test.factory-stake-fungiv2)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:12Z") })
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:kitty" false)
+(expect
+    "account balance reflects credit"
+    803.333333333333
+    (coin.get-balance "k:kitty")
+)
+
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+;Kitty already claimed his rewards when he staked, so now he has no rewards due today
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test withdraw stake k:doug
+(begin-tx)
+(use test.factory-stake-fungiv2)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:13Z") })
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:doug" true)
+
+(expect
+    "account balance reflects credit"
+    1003.333333333333
+    (coin.get-balance "k:doug")
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(commit-tx)
+;Doug withdraws his 100 KDA from the pool but doesnt get paid since hes already claimed his rewards today
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test withdraw stake k:stuart
+(begin-tx)
+(use test.factory-stake-fungiv2)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:stuart")
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:14Z") })
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:stuart" true)
+(expect
+    "account balance reflects credit"
+    1003.333333333333
+    (coin.get-balance "k:stuart")
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:stuart")
+(commit-tx)
+;All of stuarts staked 100 KDA is returned from the pool, no rewards because stuart already claimed them today
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test withdraw stake k:kitty
+(begin-tx)
+(use test.factory-stake-fungiv2)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(env-chain-data { "block-time" : (time "2022-04-29T00:00:15Z") })
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:kitty" true)
+(expect
+    "account balance reflects credit"
+    1003.333333333333
+    (coin.get-balance "k:kitty")
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(commit-tx)
+;All of kittys staked 100 KDA is returned, no new reward kitty has already claimed rewards today
+
+;All users got +3.33 KDA reward from staking and got their stake back properly
+
+
+;Theres nothing in the pool but kitty keeps trying to claim rewards a month later
+;Test withdraw stake k:kitty after pool is deactivated and he has no stake or reward - EXPECT FAILURE - PASSES
+(begin-tx)
+(use test.factory-stake-fungiv2)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(env-chain-data { "block-time" : (time "2023-05-28T00:00:15Z") })
+
+(test.factory-stake-fungiv2.claim "test-pool" "k:kitty" true)
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(coin.get-balance "test-pool")
+(coin.get-balance "k:kitty")
+(commit-tx)
+;kitty gets nothing back from the pool because he has already left the pool
+
+
+;TEST PASSES END OF TEST 1
+
+;//////////////////////////////////////////////////////////////////////////////
+;MISC TESTING
+;//////////////////////////////////////////////////////////////////////////////
+
+;Test getting emilys pools for frontend
+(begin-tx)
+(test.factory-stake-fungiv2.get-all-user-pools "k:emily")
+(commit-tx)
+
+;Test getting dougs stakes in a pool
+(begin-tx)
+(test.factory-stake-fungiv2.get-user-stakes "test-pool" "k:doug")
+(commit-tx)
+
+;test getting emilys pools she operates
+(begin-tx)
+(test.factory-stake-fungiv2.get-user-created-pools "k:emily")
+(commit-tx)
+
+;Test getters get-pools get-pool-info - PASS
+(begin-tx)
+(coin.get-balance "test-pool")
+(test.factory-stake-fungiv2.get-pools)
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+(commit-tx)
+
+;///////////////////////////////////////////////////////////////////////////////////////////////////
+;VESTING POOL TESTING
+;Vesting pools distribute tokens amongst specific accounts assigned to the pool by the pool creator
+;Vesting pools work just like staking pools, except pool creators add specific accounts to the pool and set their allocation manually
+;Vesting pools can be edited and pool members can be removed
+;When removing pool members from a vesting pool, other members do not recieve more tokens, this is due to their MAX PAY
+;When adding pools members to vesting pools, it's important to adjust all allocation weights of the other members to avoid over-payments (this is done from a frontend)
+;In this test we not only create a vesting pool, but test it by hooking it up to a staking pool
+;Vesting pools can hook up to staking pools (or other vesting pools) and 'drip' tokens into them - So here we technically test a bunch of stuff
+;Here a vesting pool should feed its tokens into a staking pool whenever people use the staking pool and we do a quick test to verify it
+;///////////////////////////////////////////////////////////////////////////////////////////////////
+
+;Create a vesting pool 'vest-pool'
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (test.stake-token.TRANSFER "k:stuart" "vest-pool" 60.0))
+(env-chain-data { "block-time" : (time "2024-04-28T00:00:00Z") })
+;Our vesting pool will dump STEAK tokens into our staking pool
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "vest-pool"
+    "Vest Pool"
+    "The Vest is the Best."
+    60.0
+    test.stake-token
+    "k:stuart"
+    60.0
+    0.0
+    86400.0
+    10.0
+    0.0
+    [
+  { "pool-id" : "vest-pool", "account" : "test-pool2", "amount" : 100.0, "set-withdraw-duration" : true, "withdraw-duration" : 0.0, "max-rewards" : 60.0}
+  ]
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "vest-pool")
+(commit-tx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create pool 'test-pool' with k:emily for 200 STEAK token to people who stake KDA
+(begin-tx)
+(coin.get-balance "k:emily")
+(test-capability (test.stake-token.TRANSFER "k:emily" "test-pool2" 200.0))
+(env-chain-data { "block-time" : (time "2024-04-28T00:00:00Z") })
+(test.factory-stake-fungiv2.create-pool
+    "test-pool2"
+    "Test Pool2"
+    200.0
+    test.stake-token
+    coin
+    "k:emily"
+    0.0
+    86400.0
+    10.0
+    0.0
+)
+(coin.get-balance "k:emily")
+(commit-tx)
+
+(begin-tx)
+(env-chain-data { "block-time" : (time "2024-04-28T00:00:00Z") })
+(test.factory-stake-fungiv2.connect-vesting-pool "test-pool2" "vest-pool" true)
+(commit-tx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test create stake 100KDA in test-pool with k:doug, 1 ms later
+(begin-tx)
+(coin.get-balance "k:doug")
+(env-chain-data { "block-time" : (time "2024-04-28T00:00:02Z") })
+(test-capability (coin.TRANSFER "k:doug" "test-pool2" 100.0))
+(test.factory-stake-fungiv2.create-stake
+    "test-pool2"
+    "k:doug"
+    100.0
+)
+(test.factory-stake-fungiv2.get-pool-info "test-pool2")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-all-user-pools "k:doug")
+(commit-tx)
+
+;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Test claim rewards function a day later after stake deposited with k:doug
+(begin-tx)
+(use test.factory-stake-fungiv2)
+
+(coin.get-balance "test-pool")
+(coin.get-balance "k:doug")
+(test.factory-stake-fungiv2.get-pool-info "test-pool")
+
+(env-chain-data { "block-time" : (time "2024-04-29T00:00:03Z") })
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool2")
+;Staking pool balance = 200
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "vest-pool")
+;Vesting pool balance = 60
+
+(expect
+    "account balance reflects credit"
+    1000.00
+    (test.stake-token.get-balance "k:doug")
+)
+
+(test.factory-stake-fungiv2.claim "test-pool2" "k:doug" false)
+
+(expect
+    "account balance reflects credit"
+    1010.000000000000
+    (test.stake-token.get-balance "k:doug")
+)
+
+(coin.get-balance "test-pool2")
+(coin.get-balance "k:doug")
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "vest-pool")
+;Vesting pool balance = 50
+
+(test.factory-stake-fungiv2.get-pool-info "test-pool2")
+;Staking pool balance = 200
+;Correct, the vesting pool has fed its tokens to the staking pool
+
+(test.factory-stake-fungiv2.get-all-user-pools "k:doug")
+(commit-tx)
+;Doug got paid 10 tokens and the vesting pool sent 10 tokens into the staking pool
+
+
+;////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+;//VESTING TEST 2 | Test withdraw + remove
+;//This test emits 10 tokens per day amongst 3 accounts,
+;//During this test we remove 1 of the accounts from the vesting pool while its still owed tokens
+;//We then let the pool continue to distribute tokens to the other 2 accounts
+;//Accounts should be still paid the correct amounts and pool end times should adjust correctly
+;//After 1 account is removed from the pool, the other accounts should NOT recieve the extra tokens
+;//After we verify the accounts recieve the proper amounts of tokens, we then test withdrawing tokens from the pool and locking the pool
+;//A locked vesting pool cannot be edited ever again and pool creators cannot withdraw tokens from it
+;;///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+(begin-tx)
+(coin.get-balance "k:stuart")
+(test-capability (coin.TRANSFER "k:stuart" "test-pool9" 60.0))
+(env-chain-data { "block-time" : (time "3010-04-01T00:00:00Z") })
+(test.kadena-stake-fungiv2-vesting.create-pool
+    "test-pool9"
+    "Test Pool9"
+    "The 9th test pool!"
+    60.0
+    coin
+    "k:stuart"
+    60.0
+    0.0
+    86400.0
+    10.0
+    0.0
+    [
+  { "pool-id" : "test-pool9", "account" : "k:emily", "amount" : 25.0, "set-withdraw-duration" : true, "withdraw-duration" : 0.0, "max-rewards" : 15.0},
+  { "pool-id" : "test-pool9", "account" : "k:kitty", "amount" : 25.0, "set-withdraw-duration" : true, "withdraw-duration" : 0.0, "max-rewards" : 15.0},
+  { "pool-id" : "test-pool9", "account" : "k:doug", "amount" : 50.0, "set-withdraw-duration" : true, "withdraw-duration" : 0.0, "max-rewards" : 30.0}
+  ]
+)
+(coin.get-balance "k:stuart")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(commit-tx)
+;Correct, our vesting pool is created
+
+;/////////////////////////////////////////
+
+;Sanity check
+(begin-tx)
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:emily")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:kitty")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:doug")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(test.kadena-stake-fungiv2-vesting.get-pool-stakes "test-pool9")
+(commit-tx)
+
+;/////////////////////////////////////////
+
+;Everyone claims rewards 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-02T00:00:01Z") })
+
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:emily")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:kitty")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:doug")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(test.kadena-stake-fungiv2-vesting.get-pool-stakes "test-pool9")
+
+(test.kadena-stake-fungiv2-vesting.get-user-pools "k:doug")
+
+
+(expect
+  "Awarded k:emily with 2.500000000000 coin"
+  "Awarded k:emily with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:emily")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:kitty")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:doug")
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(test.kadena-stake-fungiv2-vesting.get-pool-stakes "test-pool9")
+(test.kadena-stake-fungiv2-vesting.get-user-pools "k:doug")
+
+(test.kadena-stake-fungiv2-vesting.get-user-created-pools "k:stuart")
+
+(commit-tx)
+;Correct
+;"end-time": "3010-04-07T00:00:00Z"
+
+;/////////////////////////////////////////
+
+;Test claiming rewards again 1 day day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-03T00:00:01Z") })
+(expect
+  "Awarded k:emily with 2.500000000000 coin"
+  "Awarded k:emily with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+(commit-tx)
+;Correct amounts and ratios are correct
+
+;//////////////////////////////////////////////
+
+;Test claim rewards again 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-04T00:00:01Z") })
+
+(expect
+  "Awarded k:emily with 2.500000000000 coin"
+  "Awarded k:emily with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+(commit-tx)
+;Correct
+
+;/////////////////////////////////////////////////
+
+;Test claim rewards again 1 day later
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-05T00:00:01Z") })
+
+(expect
+  "Awarded k:emily with 2.500000000000 coin"
+  "Awarded k:emily with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(commit-tx)
+;Correct
+
+;/////////////////////////////////////////////////
+
+;In this test, emily is fired from the team, her remaining 5 allocations should stay in the pool by the end
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-06T00:00:02Z") })
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(test.kadena-stake-fungiv2-vesting.remove-account "test-pool9" "k:emily" false)
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(expect
+  "k:emily has no token emissions to claim in test-pool9"
+  "k:emily has no token emissions to claim in test-pool9"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:emily")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:kitty")
+(test.kadena-stake-fungiv2-vesting.get-user-stakes "test-pool9" "k:doug")
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(commit-tx)
+;Correct kitty and doug were paid the correct amounts
+;Emily could not claim her tokens
+
+;/////////////////////////////////////////////////
+
+;Here, we test claiming tokens on the last day every should get their tokens
+(begin-tx)
+
+(env-chain-data { "block-time" : (time "3010-04-07T00:00:04Z") })
+
+(test.kadena-stake-fungiv2-vesting.calculate-rewards "test-pool9" "k:kitty")
+(test.kadena-stake-fungiv2-vesting.calculate-multiplier "test-pool9")
+
+(expect
+  "k:emily has no token emissions to claim in test-pool9"
+  "k:emily has no token emissions to claim in test-pool9"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "Awarded k:kitty with 2.500000000000 coin"
+  "Awarded k:kitty with 2.500000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "Awarded k:doug with 5.000000000000 coin"
+  "Awarded k:doug with 5.000000000000 coin"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+(test.kadena-stake-fungiv2-vesting.calculate-rewards "test-pool9" "k:kitty")
+
+(commit-tx)
+;Correct
+;kitty and doug claim their final tokens and emily still cannot claim
+
+;/////////////////////////////////////////////////
+
+;Here we check to make sure accounts cannot keep withdrawing after they have claimed their max tokens
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-08T00:00:03Z") })
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(expect
+  "k:emily has no token emissions to claim in test-pool9"
+  "k:emily has no token emissions to claim in test-pool9"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:emily"))
+
+(expect
+  "k:kitty has no token emissions to claim in test-pool9"
+  "k:kitty has no token emissions to claim in test-pool9"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:kitty"))
+
+(expect
+  "k:doug has no token emissions to claim in test-pool9"
+  "k:doug has no token emissions to claim in test-pool9"
+  (test.kadena-stake-fungiv2-vesting.claim "test-pool9" "k:doug"))
+
+(commit-tx)
+;Correct
+;5 Tokens remain in the pool which are left from when emily was removed from the team - She had 5 tokens left but was fired =( and could not claim them
+;The 5 remaining tokens were also not given to other pool members which is also correct
+
+;/////////////////////////////////////////////////
+
+;Here, we withdraw the 4 of 5 tokens that was due to emily before she was fired
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-08T00:00:04Z") })
+
+(test.kadena-stake-fungiv2-vesting.get-user-pools "k:kitty")
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(coin.get-balance "test-pool9")
+
+(test.kadena-stake-fungiv2-vesting.withdraw-funds "test-pool9" "k:stuart" 4.0)
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(commit-tx)
+;Correct, we withdraw the 3 tokens from the pool
+
+;/////////////////////////////////////////////////
+
+;Here, we test locking the pool and attempting to withdraw the last toke
+(begin-tx)
+(env-chain-data { "block-time" : (time "3010-04-08T00:00:05Z") })
+
+(test.kadena-stake-fungiv2-vesting.get-user-pools "k:kitty")
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(coin.get-balance "test-pool9")
+
+(test.kadena-stake-fungiv2-vesting.lock-pool "test-pool9" "k:stuart")
+
+;Test locking pool and withdrawing after
+(expect-failure
+ "Locked pools may not be recovered."
+ "Locked pools may not be recovered."
+(test.kadena-stake-fungiv2-vesting.withdraw-funds "test-pool9" "k:stuart" 1.0))
+
+(test.kadena-stake-fungiv2-vesting.get-pool-info "test-pool9")
+
+(commit-tx)
+;Correct, we cannot withdraw the last token because we have locked the pool
