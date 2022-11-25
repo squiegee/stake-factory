@@ -1,5 +1,6 @@
 # stake-factory
-Kadena Stake Factory 
+Stake Factory 
 
-See flow chart:
-https://miro.com/app/board/uXjVOwsKGTA=/?share_link_id=104940149520
+-Staking Pool Creator 
+-Vesting Pool Creator 
+-Stake Token
